@@ -1,5 +1,7 @@
 # Required
 playwright>=1.40
+# CA bundle for HTTPS feed fetching (macOS python.org builds ship without one wired up)
+certifi>=2024.0.0
 
 # Optional: only needed if you parse LLM-generated JSON yourself
 # (see references/json-parsing-quirks.md). Not imported by any script here.

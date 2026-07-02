@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
-"""News aggregator: NewsAPI + HN + Reddit + arXiv + 3x Economist RSS + BBC + Bloomberg + CNBC"""
-import json, os, sys, time, urllib.request, urllib.error, urllib.parse, html, re, pathlib, email.utils
+"""News aggregator. Keyless sources: HN + Reddit + arXiv + RSS (Economist/BBC/Bloomberg/
+CNBC/TechCrunch/Verge/Ars/Wired/MIT TR/Guardian/Al Jazeera/NYT/NPR). Optional: NewsAPI."""
+import json, os, ssl, sys, time, urllib.request, urllib.error, urllib.parse, html, re, pathlib, email.utils
 from datetime import datetime, timezone, timedelta
 
-# Read API key from env or a local .env file (project-relative, not a hardcoded fallback)
+# macOS python.org builds ship without a wired-up CA bundle; use certifi when present
+try:
+    import certifi
+    _ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+except ImportError:
+    _ssl_ctx = ssl.create_default_context()
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.HTTPSHandler(context=_ssl_ctx)))
+
+# NewsAPI is optional: without a key that source is skipped, all RSS/API sources still run
 NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY") or ""
 if not NEWSAPI_KEY:
     env_path = pathlib.Path(__file__).resolve().parent.parent / ".env"
@@ -14,11 +23,11 @@ if not NEWSAPI_KEY:
                 break
 
 if not NEWSAPI_KEY:
-    print("ERROR: NEWSAPI_KEY not set. Set it in the environment or in .env (see .env.example).", file=sys.stderr)
-    sys.exit(1)
-TIER_1 = {"Reuters", "AP News", "Bloomberg", "Financial Times", "BBC News", "The Economist"}
+    print("WARNING: NEWSAPI_KEY not set - skipping NewsAPI, using keyless sources only.", file=sys.stderr)
+TIER_1 = {"Reuters", "AP News", "Bloomberg", "Financial Times", "BBC News", "The Economist",
+          "The Guardian", "New York Times"}
 TIER_2 = {"TechCrunch", "The Verge", "Wired", "Ars Technica", "CNBC", "NPR",
-          "MIT Technology Review", "Nature"}
+          "MIT Technology Review", "Nature", "Al Jazeera"}
 TIER_3 = {"HackerNews", "Reddit"}
 ALL_TRUSTED = TIER_1 | TIER_2
 
@@ -322,6 +331,57 @@ def fetch_cnbc_rss():
     return results[:15]
 
 
+# ── Generic RSS fetcher (tech press + world/geopolitics desks, all keyless) ──
+GENERIC_FEEDS = [
+    # (source name, tier, default section, feed url)
+    ("TechCrunch",            2, "technology",  "https://techcrunch.com/feed/"),
+    ("The Verge",             2, "technology",  "https://www.theverge.com/rss/index.xml"),
+    ("Ars Technica",          2, "technology",  "https://feeds.arstechnica.com/arstechnica/index"),
+    ("Wired",                 2, "technology",  "https://www.wired.com/feed/rss"),
+    ("MIT Technology Review", 2, "technology",  "https://www.technologyreview.com/feed/"),
+    ("The Guardian",          1, "geopolitics", "https://www.theguardian.com/world/rss"),
+    ("Al Jazeera",            2, "geopolitics", "https://www.aljazeera.com/xml/rss/all.xml"),
+    ("New York Times",        1, "geopolitics", "https://rss.nytimes.com/services/xml/rss/nyt/World.xml"),
+    ("NPR",                   2, "general",     "https://feeds.npr.org/1001/rss.xml"),
+]
+
+# shopping/deals content (Wired runs coupon posts in its main feed) — never news
+_JUNK_RE = re.compile(r'(?i)promo code|coupon|% off|\bdeals?\b|black friday|prime day|gift guide')
+
+def fetch_generic_rss():
+    results = []
+    import xml.etree.ElementTree as ET
+    ATOM = "{http://www.w3.org/2005/Atom}"
+    for name, tier, section, url in GENERIC_FEEDS:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "NewsAgent/1.0"})
+            with urllib.request.urlopen(req, timeout=8) as r:
+                data = r.read().decode(errors="replace")
+            root = ET.fromstring(data)
+            items = root.findall(".//item") or root.findall(f".//{ATOM}entry")
+            for item in items[:12]:
+                t = item.findtext("title") or item.findtext(f"{ATOM}title") or ""
+                if _JUNK_RE.search(t):
+                    continue
+                d = item.findtext("description") or item.findtext(f"{ATOM}summary") or ""
+                d = re.sub(r'<[^>]+>', '', d).strip()[:200]
+                pd = (item.findtext("pubDate") or item.findtext(f"{ATOM}published")
+                      or item.findtext(f"{ATOM}updated") or "")
+                lk = item.findtext("link") or ""
+                if not lk:  # Atom: link is an attribute
+                    link_el = item.find(f"{ATOM}link")
+                    lk = link_el.get("href", "") if link_el is not None else ""
+                # general-desk feeds (NPR) get keyword-routed; themed desks keep their section
+                sec = section
+                if section == "general":
+                    sec = guess_section({"source": name, "title": t, "desc": d})
+                results.append({"source": name, "tier": tier, "section": sec,
+                    "title": t, "desc": d, "url": lk, "published": pd[:31] if pd else ""})
+        except Exception:
+            pass
+    return results
+
+
 def compute_score(article, all_articles):
     score = cred_score(article.get("tier",0))
     title_words = set((article.get("title")or"").lower().split())-{"the","a","an","is","are","was","were","to","of","in","for","on","and","or","with"}
@@ -340,7 +400,9 @@ def fmt_score(s):
 
 # ── MAIN ──
 all_a = []
-all_a.extend(fetch_newsapi())        # supplemental
+if NEWSAPI_KEY:
+    all_a.extend(fetch_newsapi())    # supplemental, needs key
+all_a.extend(fetch_generic_rss())    # tech press + world desks, keyless
 all_a.extend(fetch_bbc_rss())        # fresh, tier-1
 all_a.extend(fetch_bloomberg_rss())  # fresh, tier-1
 all_a.extend(fetch_cnbc_rss())       # fresh, tier-2

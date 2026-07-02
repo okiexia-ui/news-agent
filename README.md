@@ -16,7 +16,7 @@ git clone <this-repo>
 cd news-agent
 pip install -r requirements.txt
 python3 -m playwright install chromium
-cp .env.example .env   # 填入 NEWSAPI_KEY（发邮件的话还要填 Gmail 相关）
+cp .env.example .env   # 全部可选：抓新闻零配置就能跑，发邮件才需要填 Gmail 相关
 ```
 
 在 Claude Code（或其他支持 Agent Skills 的 runtime）里把这个目录放进 skills 目录，然后直接说话：
@@ -43,7 +43,7 @@ news-agent/
 ├── templates/
 │   └── news_agent.html     # A4 HTML 模板，__PLACEHOLDER__ 占位符
 ├── scripts/
-│   ├── fetch_news.py           # 聚合 NewsAPI + HN + Reddit + arXiv + BBC/Bloomberg/CNBC/Economist RSS
+│   ├── fetch_news.py           # 聚合 17 路来源（16 路免 key + 可选 NewsAPI），见下方"新闻来源"
 │   ├── prefetch_news.py        # 跑 fetch_news.py 并写入缓存文件
 │   └── render_and_send.py      # JSON → HTML → PDF（Playwright）→ 可选发邮件
 ├── references/
@@ -54,11 +54,25 @@ news-agent/
 └── requirements.txt
 ```
 
+## 新闻来源
+
+抓新闻**零配置可跑**——绝大多数来源不需要任何 API key：
+
+| 类型 | 来源 | key |
+|------|------|-----|
+| 社区/研究 | HackerNews · Reddit (r/artificial, r/MachineLearning) · arXiv (cs.AI/cs.LG) | 不需要 |
+| 通讯社/大报 RSS | BBC ×2 · Bloomberg ×2 · CNBC · The Guardian · NYT World · Al Jazeera · NPR | 不需要 |
+| 科技媒体 RSS | TechCrunch · The Verge · Ars Technica · Wired · MIT Technology Review | 不需要 |
+| 编辑信号 | The Economist RSS ×3 | 不需要 |
+| 补充 | NewsAPI（可选，配 `NEWSAPI_KEY` 才启用） | 免费注册 |
+
+此外 `SKILL.md` 里还有一步「agent 自己做 web research」：实时市场行情和头条事件核实由跑 skill 的 agent 用自己的 WebSearch 能力补充——RSS 管广度，agent 搜索管纵深。
+
 ## 配置
 
-见 `.env.example`。核心是两组：
-- `NEWSAPI_KEY`——抓新闻用，[newsapi.org](https://newsapi.org/register) 免费注册拿
-- `GMAIL_APP_PASSWORD` / `FROM_EMAIL` / `TO_EMAILS`——发邮件用，Gmail 要用「应用专用密码」而不是登录密码
+见 `.env.example`，全部可选：
+- `NEWSAPI_KEY`——想多一路 NewsAPI 补充源再配，[newsapi.org](https://newsapi.org/register) 免费注册
+- `GMAIL_APP_PASSWORD` / `FROM_EMAIL` / `TO_EMAILS`——发邮件才需要，Gmail 要用「应用专用密码」而不是登录密码
 
 不发邮件的话，`render_and_send.py` 加 `--no-email` 参数即可，只导出 PDF 不需要配邮箱。
 

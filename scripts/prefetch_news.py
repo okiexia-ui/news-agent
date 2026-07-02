@@ -4,10 +4,14 @@ import subprocess, sys, pathlib
 
 CACHE_FILE = pathlib.Path("/tmp/news_agent_news_cache.txt")
 
-result = subprocess.run(
-    [sys.executable, str(pathlib.Path(__file__).parent / "fetch_news.py")],
-    capture_output=True, text=True, timeout=100
-)
+try:
+    result = subprocess.run(
+        [sys.executable, str(pathlib.Path(__file__).parent / "fetch_news.py")],
+        capture_output=True, text=True, timeout=240
+    )
+except subprocess.TimeoutExpired:
+    print("ERROR: fetch_news.py timed out after 240s (slow network?)", file=sys.stderr)
+    sys.exit(1)
 
 output = result.stdout
 for ch in ['​', '‌', '‍', '﻿']:
