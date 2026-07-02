@@ -1,0 +1,6 @@
+# Required
+playwright>=1.40
+
+# Optional: only needed if you parse LLM-generated JSON yourself
+# (see references/json-parsing-quirks.md). Not imported by any script here.
+# json-repair>=0.25

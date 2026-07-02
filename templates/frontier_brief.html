@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>FRONTIER BRIEF</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600;6..72,700&family=Noto+Sans+SC:wght@400;500;700;900&family=JetBrains+Mono:wght@400;500;700;800&display=swap');
+
+*{margin:0;padding:0;box-sizing:border-box}
+@page{size:A4;margin:0}
+body{
+  font-family:'Noto Sans SC','Inter',-apple-system,sans-serif;
+  background:#e4ddd2;color:var(--fg);
+  -webkit-print-color-adjust:exact;print-color-adjust:exact
+}
+:root{
+  --bg:#f0e8da;--card:#fcf8f0;--fg:#1a1816;--t2:#4a3f35;--t3:#7a6e60;
+  --border:#d4c9bb;--accent:#c04a1a;--accent2:#1a5c4a;
+  --accent-muted:rgba(192,74,26,0.10);
+  --dark:#161412;--dark-text:#f0ece4;--dark-t2:rgba(240,236,228,0.55);
+  --blue:#1d4ed8;--blue-bg:#dbeafe;
+  --green:#047857;--green-bg:#d1fae5;
+  --red:#c04a1a;--red-bg:rgba(192,74,26,0.10);
+  --purple:#7c3aed;--purple-bg:#ede9fe;
+  --gold:#b8860b;--gold-bg:#fef3c7;
+}
+.page{width:210mm;min-height:297mm;margin:20px auto;background:var(--bg);box-shadow:0 4px 24px rgba(0,0,0,0.12);overflow:hidden}
+
+.top-rule{height:6px;background:linear-gradient(90deg,var(--accent) 0%,var(--accent) 50%,var(--accent2) 50%,var(--accent2) 100%)}
+.header{padding:22px 32px 10px;border-bottom:2px solid var(--fg)}
+.h-row{display:flex;justify-content:space-between;align-items:flex-end}
+.h-left h1{font-family:'Newsreader','Noto Serif SC',serif;font-size:38px;font-weight:800;letter-spacing:-0.03em;line-height:1;color:var(--fg)}
+.h-left .h-sub{font-size:10px;font-weight:600;letter-spacing:5px;color:var(--accent);margin-top:5px;text-transform:uppercase}
+.h-right{text-align:right;font-size:11px;color:var(--t3);line-height:1.6}
+.h-right .h-date{font-size:15px;font-weight:700;color:var(--fg);letter-spacing:-0.01em}
+.h-badge{display:inline-block;background:var(--accent);color:#fff;font-size:7.5px;font-weight:700;padding:3px 14px;border-radius:12px;letter-spacing:2px;margin-top:3px;text-transform:uppercase}
+.tagline{padding:7px 32px;font-size:8.5px;font-weight:600;color:var(--t3);letter-spacing:4px;text-align:center;text-transform:uppercase;border-bottom:1px solid var(--border)}
+
+.content{padding:16px 28px 20px}
+
+.sh{display:flex;align-items:center;gap:10px;margin-bottom:10px;margin-top:20px}
+.sh:first-of-type{margin-top:0}
+.sh-line{flex:1;height:2px;background:var(--accent);opacity:0.5}
+.sh-label{font-family:'Inter','Noto Sans SC',sans-serif;font-size:10px;font-weight:700;letter-spacing:3px;color:var(--accent);white-space:nowrap;text-transform:uppercase}
+
+.bp{background:var(--dark);border-radius:12px;padding:18px 20px;margin-bottom:16px}
+.bp-hdr{font-size:10px;font-weight:700;color:var(--dark-t2);letter-spacing:4px;margin-bottom:12px;text-transform:uppercase}
+.bp-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.bp-card{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:14px;display:flex;gap:14px}
+.bp-n{font-family:'JetBrains Mono',monospace;font-size:32px;font-weight:800;color:rgba(255,255,255,0.06);line-height:1;min-width:36px;letter-spacing:-0.04em}
+.bp-b{flex:1}
+.bp-tag{font-size:7px;font-weight:700;letter-spacing:1.5px;display:inline-block;padding:2px 8px;border-radius:3px;margin-bottom:5px}
+.bp-t1{background:var(--blue);color:#fff}.bp-t2{background:var(--green);color:#fff}
+.bp-t3{background:var(--purple);color:#fff}.bp-t4{background:var(--red);color:#fff}
+.bp-title{font-size:15px;font-weight:700;color:var(--dark-text);line-height:1.3;letter-spacing:-0.01em}
+.bp-desc{font-size:10px;color:var(--dark-t2);line-height:1.5;margin-top:3px}
+
+.qbar{border-left:4px solid var(--accent);background:var(--accent-muted);padding:10px 16px;border-radius:8px;margin-bottom:16px}
+.qbar .qt{font-size:12px;font-weight:600;color:var(--fg)}
+.qbar .qa{font-size:9.5px;color:var(--t3);margin-left:6px}
+
+.cross{border:1px solid var(--border);border-radius:10px;padding:14px 18px;margin-bottom:16px;background:var(--card)}
+.cross-hdr{font-size:9px;font-weight:700;letter-spacing:3px;color:var(--accent2);margin-bottom:8px;text-transform:uppercase}
+.cross-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.cross-item{background:rgba(26,92,74,0.04);padding:10px 12px;border-radius:8px}
+.ci-title{font-size:11px;font-weight:700;color:var(--accent2);margin-bottom:3px}
+.ci-body{font-size:10px;line-height:1.6;color:var(--t2)}
+
+.nc{border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:10px;background:var(--card)}
+.nc-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.nc-tag{font-size:8px;font-weight:700;letter-spacing:1px;padding:2px 8px;border-radius:4px}
+.nct1{background:var(--blue-bg);color:var(--blue)}.nct2{background:var(--green-bg);color:var(--green)}
+.nct3{background:var(--purple-bg);color:var(--purple)}.nct4{background:var(--red-bg);color:var(--red)}
+.nct5{background:var(--gold-bg);color:var(--gold)}
+.badge-group{display:flex;gap:4px}
+.imp-badge{font-size:7.5px;font-weight:700;padding:2px 8px;border-radius:4px}
+.imp-h{background:var(--red-bg);color:var(--red)}.imp-m{background:var(--gold-bg);color:#92400e}
+.cred-badge{font-size:7px;font-weight:700;padding:1px 6px;border-radius:3px}
+.cred-h{background:rgba(4,120,87,0.12);color:var(--green)}
+.cred-m{background:var(--gold-bg);color:#92400e}.cred-l{background:var(--border);color:var(--t2)}
+.nc-title{font-family:'Newsreader','Noto Serif SC',serif;font-size:16px;font-weight:700;line-height:1.3;margin-bottom:5px;color:var(--fg);letter-spacing:-0.01em}
+.nc-meta{font-size:9px;color:var(--t3);margin-bottom:6px}
+.nc-l{font-size:10.5px;line-height:1.7;margin-bottom:3px;color:var(--t2);padding-left:10px;border-left:2.5px solid var(--accent);opacity:0.85}
+.nc-l .nl{font-weight:700;color:var(--accent2);margin-right:3px}
+
+.geo{border:2px solid var(--red);border-radius:10px;padding:14px 16px;margin-bottom:16px;background:var(--red-bg)}
+.geo-tag{font-size:8px;font-weight:700;letter-spacing:2px;color:var(--red);margin-bottom:4px;text-transform:uppercase}
+.geo-title{font-family:'Newsreader','Noto Serif SC',serif;font-size:16px;font-weight:700;margin-bottom:2px;color:var(--fg)}
+.geo-src{font-size:9px;color:var(--t3);margin-bottom:8px}
+.geo-4{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.geo-4-item{background:var(--card);padding:10px;border-radius:6px;border:1px solid rgba(192,74,26,0.08)}
+.g4l{font-size:8px;font-weight:700;color:var(--accent);letter-spacing:1.5px;margin-bottom:2px}
+.g4t{font-size:10px;line-height:1.5;color:var(--t2)}.g4t strong{color:var(--fg)}
+
+.ps-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px}
+.prob-box,.scen-box{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px}
+.prob-hdr,.scen-hdr{font-size:9px;font-weight:700;letter-spacing:2.5px;color:var(--accent2);margin-bottom:10px;padding-bottom:5px;border-bottom:2px solid var(--accent2);opacity:0.7;text-transform:uppercase}
+.prob-row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:11px}
+.prob-row:last-child{border-bottom:none}
+.pr-name{color:var(--t2)}.pr-name strong{color:var(--fg);font-size:12px}
+.pr-bar-wrap{display:flex;align-items:center;gap:8px;min-width:110px;background:rgba(0,0,0,0.04);border-radius:4px;padding:2px 6px}
+.pr-bar{height:8px;border-radius:4px;min-width:4px;max-width:80px}
+.prb-h{background:var(--accent)}.prb-m{background:var(--gold)}.prb-l{background:var(--blue)}
+.pr-pct{font-family:'JetBrains Mono',monospace;font-weight:800;font-size:13px;min-width:36px;text-align:right;color:var(--fg)}
+.scen-item{padding:7px 0;border-bottom:1px solid var(--border);font-size:10.5px;line-height:1.5}
+.scen-item:last-child{border-bottom:none}
+.si-tag{font-size:7.5px;font-weight:700;letter-spacing:1px;padding:2px 7px;border-radius:3px;margin-right:5px}
+.si-bull{background:rgba(4,120,87,0.12);color:var(--green)}
+.si-base{background:var(--blue-bg);color:var(--blue)}
+.si-bear{background:var(--red-bg);color:var(--red)}
+.si-text{color:var(--t2);margin-top:2px}.si-text strong{color:var(--fg)}
+
+.b2c{display:grid;grid-template-columns:1.4fr 1fr;gap:14px;margin-bottom:14px}
+.wi{padding:7px 10px;border-bottom:1px solid var(--border);font-size:11px;line-height:1.6;color:var(--t2)}
+.wi:last-child{border-bottom:none}.wi strong{color:var(--fg)}
+.wd{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px}
+.wd1{background:var(--accent)}.wd2{background:var(--green)}.wd3{background:var(--purple)}.wd4{background:var(--blue)}
+.mkt{background:var(--dark);border-radius:10px;padding:14px 16px}
+.mkt-hdr{font-size:9px;font-weight:700;color:var(--dark-t2);letter-spacing:3px;margin-bottom:8px;text-transform:uppercase}
+.mkt-g{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+.mkt-item{display:flex;justify-content:space-between;padding:5px 8px;background:rgba(255,255,255,0.06);border-radius:4px;font-size:10.5px}
+.mn{color:var(--dark-t2)}
+.mv{font-family:'JetBrains Mono',monospace;font-weight:700;color:var(--dark-text);letter-spacing:-0.02em}
+.m-up{color:#34d399!important;font-weight:800}
+.m-down{color:#f87171!important;font-weight:800}
+.m-warn{color:#fbbf24!important;font-weight:800}
+.hts{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}
+.ht{font-size:8px;font-weight:700;color:var(--accent2);background:rgba(26,92,74,0.08);padding:2px 10px;border-radius:12px}
+
+.et{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 18px}
+.et-hdr{font-size:9px;font-weight:700;letter-spacing:3px;color:var(--accent);margin-bottom:6px;text-transform:uppercase}
+.et-body{font-size:11px;line-height:1.7;color:var(--t2)}.et-body strong{color:var(--fg)}
+
+.legend{margin-top:12px;padding:8px 12px;background:var(--accent-muted);border-radius:8px;font-size:8.5px;color:var(--t3);line-height:1.7}
+.legend strong{color:var(--t2)}
+.footer{padding:10px 28px;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-size:8px;color:var(--t3)}
+
+@media print{.page{margin:0;box-shadow:none}body{background:#e4ddd2}}
+</style>
+</head>
+<body>
+<div class="page">
+<div class="top-rule"></div>
+
+<div class="header">
+<div class="h-row">
+<div class="h-left">
+<h1>FRONTIER BRIEF</h1>
+<div class="h-sub">前沿 · 科技 · 资本 · 地缘</div>
+</div>
+<div class="h-right">
+<div class="h-date">__DATE__</div>
+<div>__VOL__</div>
+<div class="h-badge">5 min read</div>
+</div>
+</div>
+</div>
+
+<div class="tagline">在事件影响市场之前理解它</div>
+
+<div class="content">
+
+<!-- BIG PICTURE -->
+<div class="bp">
+<div class="bp-hdr">📍 今日四大信号</div>
+<div class="bp-grid">
+__BIG_PICTURE__
+</div>
+</div>
+
+<!-- QUOTE -->
+<div class="qbar">
+<span class="qt">__QUOTE__</span> <span class="qa">—— __QUOTE_AUTHOR__</span>
+</div>
+
+<!-- CROSS-SIGNAL -->
+<div class="cross">
+<div class="cross-hdr">🔗 跨信号分析</div>
+<div class="cross-grid">
+__CROSS_SIGNAL__
+</div>
+</div>
+
+<!-- HEADLINES -->
+<div class="sh"><span class="sh-label">📰 今日要闻</span><span class="sh-line"></span></div>
+
+__NEWS_CARDS__
+
+<!-- GEOPOLITICAL -->
+<div class="sh"><span class="sh-label">🌍 地缘政治</span><span class="sh-line"></span></div>
+
+__GEOPOLITICAL__
+
+<!-- MARKETS -->
+<div class="sh"><span class="sh-label">📊 市场与经济</span><span class="sh-line"></span></div>
+
+__MARKET_NEWS__
+
+<!-- PROB + SCENARIO -->
+<div class="sh"><span class="sh-label">🎲 概率与情景</span><span class="sh-line"></span></div>
+
+__PROB_SCENARIO__
+
+<!-- COMMUNITY -->
+<div class="sh"><span class="sh-label">💬 社区热议</span><span class="sh-line"></span></div>
+
+__COMMUNITY__
+
+<!-- WATCHLIST -->
+<div class="sh"><span class="sh-label">🔭 重点观察</span><span class="sh-line"></span></div>
+
+<div class="b2c">
+<div>
+__WATCH_LIST__
+<div class="hts">
+__HASHTAGS__
+</div>
+</div>
+<div>
+__MARKET_DASH__
+</div>
+</div>
+
+<!-- EDITOR -->
+<div class="et">
+<div class="et-hdr">🎯 编辑观点</div>
+<div class="et-body">
+__EDITOR_TAKE__
+</div>
+</div>
+
+<div class="legend">
+<strong>Signal 评分</strong> 🔥 高影响 ｜ 🟡 中影响 ｜ 💬 社区热度<br>
+<strong>可信度</strong> 🟢 高可信(T1) ｜ 🟡 中可信(T2) ｜ ⚪ 低可信(T3/HN)
+</div>
+
+</div>
+
+<div class="footer">
+<span>FRONTIER BRIEF · 自动编译</span>
+<span>__DATA_SOURCE__</span>
+</div>
+
+</div>
+</body>
+</html>
