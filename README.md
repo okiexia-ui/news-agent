@@ -1,6 +1,6 @@
-# Frontier Brief Pro
+# News Agent · 新闻侠
 
-一份「科技 · 资本 · 地缘政治」主题的结构化日报生成器：抓新闻 → agent 生成结构化内容 → 赤陶暖色调 A4 排版 → 导出 PDF → 可选邮件发送。
+> 原名 Frontier Brief Pro。一份「科技 · 资本 · 地缘政治」主题的结构化日报生成器：抓新闻 → agent 生成结构化内容 → 赤陶暖色调 A4 排版 → 导出 PDF → 可选邮件发送。
 
 作为 [Agent Skill](https://github.com/anthropics/skills) 使用（Claude Code / 其他兼容 agent runtime），也可以单独当命令行工具用。
 
