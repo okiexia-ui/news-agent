@@ -31,7 +31,7 @@
 
 ## 占位符列表
 
-模板 (`templates/frontier_brief.html`) 里全部 `__PLACEHOLDER__`：
+模板 (`templates/news_agent.html`) 里全部 `__PLACEHOLDER__`：
 
 `__DATE__`, `__VOL__`, `__BIG_PICTURE__`, `__QUOTE__`, `__QUOTE_AUTHOR__`,
 `__CROSS_SIGNAL__`, `__NEWS_CARDS__`, `__GEOPOLITICAL__`, `__MARKET_NEWS__`,

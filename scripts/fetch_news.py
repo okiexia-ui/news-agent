@@ -64,7 +64,7 @@ def is_fresh(article, max_hours):
         return True  # keep on exception
 
 # ── URL dedup ──
-SEEN_FILE = pathlib.Path("/tmp/frontier_brief_seen_urls.txt")
+SEEN_FILE = pathlib.Path("/tmp/news_agent_seen_urls.txt")
 def load_seen_urls():
     if SEEN_FILE.exists():
         return set(u for u in SEEN_FILE.read_text().strip().split("\n") if u.strip())
@@ -79,7 +79,7 @@ MARKET_KEYWORDS = ["stock","market","NVIDIA","semiconductor","chip","Fed","Feder
 
 def fetch_json(url, timeout=6):
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "FrontierBrief/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "NewsAgent/1.0"})
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode())
     except: return {"_error": "timeout"}
@@ -177,7 +177,7 @@ def fetch_reddit():
     for sub in ["artificial","MachineLearning"]:
         try:
             req = urllib.request.Request(f"https://www.reddit.com/r/{sub}/hot.json?limit=12",
-                headers={"User-Agent":"FrontierBrief/1.0"})
+                headers={"User-Agent":"NewsAgent/1.0"})
             with urllib.request.urlopen(req, timeout=6) as r:
                 for post in json.loads(r.read().decode()).get("data",{}).get("children",[]):
                     d = post.get("data",{})
@@ -198,7 +198,7 @@ def fetch_arxiv():
     results = []
     url="http://export.arxiv.org/api/query?search_query=cat:cs.AI+OR+cat:cs.LG&sortBy=submittedDate&sortOrder=descending&max_results=10"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent":"FrontierBrief/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent":"NewsAgent/1.0"})
         with urllib.request.urlopen(req, timeout=8) as r:
             data = r.read().decode()
         import xml.etree.ElementTree as ET
@@ -224,7 +224,7 @@ def fetch_economist_rss():
         ("The World in Brief","https://feeds.economist.com/v1/rss/the-world-in-brief/558c580d-7a74-40b4-8c9e-e55a79022c4b"),
     ]:
         try:
-            req=urllib.request.Request(url,headers={"User-Agent":"FrontierBrief/1.0"})
+            req=urllib.request.Request(url,headers={"User-Agent":"NewsAgent/1.0"})
             with urllib.request.urlopen(req,timeout=8) as r:
                 data=r.read().decode()
             import xml.etree.ElementTree as ET
@@ -254,7 +254,7 @@ def fetch_bbc_rss():
     ]
     for name, url in feeds:
         try:
-            req = urllib.request.Request(url, headers={"User-Agent":"FrontierBrief/1.0"})
+            req = urllib.request.Request(url, headers={"User-Agent":"NewsAgent/1.0"})
             with urllib.request.urlopen(req, timeout=8) as r:
                 data = r.read().decode()
             import xml.etree.ElementTree as ET
@@ -278,7 +278,7 @@ def fetch_bloomberg_rss():
     ]
     for name, url in feeds:
         try:
-            req = urllib.request.Request(url, headers={"User-Agent":"FrontierBrief/1.0"})
+            req = urllib.request.Request(url, headers={"User-Agent":"NewsAgent/1.0"})
             with urllib.request.urlopen(req, timeout=8) as r:
                 data = r.read().decode()
             import xml.etree.ElementTree as ET
@@ -306,7 +306,7 @@ def fetch_cnbc_rss():
     results = []
     try:
         url = "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=19854910"
-        req = urllib.request.Request(url, headers={"User-Agent":"FrontierBrief/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent":"NewsAgent/1.0"})
         with urllib.request.urlopen(req, timeout=8) as r:
             data = r.read().decode()
         import xml.etree.ElementTree as ET

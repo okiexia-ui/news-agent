@@ -1,6 +1,6 @@
 # News Agent · 新闻侠
 
-> 原名 Frontier Brief Pro。一份「科技 · 资本 · 地缘政治」主题的结构化日报生成器：抓新闻 → agent 生成结构化内容 → 赤陶暖色调 A4 排版 → 导出 PDF → 可选邮件发送。
+一份「科技 · 资本 · 地缘政治」主题的结构化日报生成器：抓新闻 → agent 生成结构化内容 → 赤陶暖色调 A4 排版 → 导出 PDF → 可选邮件发送。
 
 作为 [Agent Skill](https://github.com/anthropics/skills) 使用（Claude Code / 其他兼容 agent runtime），也可以单独当命令行工具用。
 
@@ -13,7 +13,7 @@
 
 ```bash
 git clone <this-repo>
-cd frontier-brief-pro
+cd news-agent
 pip install -r requirements.txt
 python3 -m playwright install chromium
 cp .env.example .env   # 填入 NEWSAPI_KEY（发邮件的话还要填 Gmail 相关）
@@ -22,7 +22,7 @@ cp .env.example .env   # 填入 NEWSAPI_KEY（发邮件的话还要填 Gmail 相
 在 Claude Code（或其他支持 Agent Skills 的 runtime）里把这个目录放进 skills 目录，然后直接说话：
 
 ```
-「生成今天的 frontier brief」
+「生成今天的 News Agent 日报」
 ```
 
 Agent 会照着 `SKILL.md` 里的步骤：抓新闻 → 自己生成结构化 JSON → 渲染 PDF → 询问是否要发邮件。
@@ -31,17 +31,17 @@ Agent 会照着 `SKILL.md` 里的步骤：抓新闻 → 自己生成结构化 JS
 
 ```bash
 python3 scripts/prefetch_news.py
-# 手动或用别的方式生成 /tmp/frontier_brief_data.json（结构见 SKILL.md 里的 schema）
-python3 scripts/render_and_send.py /tmp/frontier_brief_data.json morning --no-email
+# 手动或用别的方式生成 /tmp/news_agent_data.json（结构见 SKILL.md 里的 schema）
+python3 scripts/render_and_send.py /tmp/news_agent_data.json morning --no-email
 ```
 
 ## 目录结构
 
 ```
-frontier-brief-pro/
+news-agent/
 ├── SKILL.md                    # agent 读的主文档：pipeline 步骤 + JSON schema
 ├── templates/
-│   └── frontier_brief.html     # A4 HTML 模板，__PLACEHOLDER__ 占位符
+│   └── news_agent.html     # A4 HTML 模板，__PLACEHOLDER__ 占位符
 ├── scripts/
 │   ├── fetch_news.py           # 聚合 NewsAPI + HN + Reddit + arXiv + BBC/Bloomberg/CNBC/Economist RSS
 │   ├── prefetch_news.py        # 跑 fetch_news.py 并写入缓存文件

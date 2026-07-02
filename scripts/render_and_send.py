@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Render a FRONTIER BRIEF structured-JSON payload into the HTML template,
+Render a NEWS AGENT structured-JSON payload into the HTML template,
 export it to an A4 PDF via Playwright, and (optionally) email it out.
 
 This script does NOT call an LLM. The agent running this skill is expected
@@ -23,7 +23,7 @@ import json
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parent
-TEMPLATE_PATH = PROJECT_DIR / "templates" / "frontier_brief.html"
+TEMPLATE_PATH = PROJECT_DIR / "templates" / "news_agent.html"
 
 
 def load_env():
@@ -64,7 +64,7 @@ def _safe_items(items) -> list:
 
 
 def render_html(data: dict, time_label: str) -> str:
-    """Fill the FRONTIER BRIEF HTML template with data."""
+    """Fill the NEWS AGENT HTML template with data."""
     html = TEMPLATE_PATH.read_text()
 
     # Big picture
@@ -232,7 +232,7 @@ def render_html(data: dict, time_label: str) -> str:
     html = html.replace("__DATE__", date_str)
     html = html.replace("__VOL__", f"VOL.{today.strftime('%m%d')}")
     brief_type = "早报" if time_label == "morning" else "晚报"
-    html = html.replace("FRONTIER BRIEF", f"FRONTIER BRIEF · {brief_type}")
+    html = html.replace("NEWS AGENT", f"NEWS AGENT · {brief_type}")
     html = html.replace("__DATA_SOURCE__", f"数据采集 · {today.strftime('%Y-%m-%d %H:%M UTC')}")
 
     return html
@@ -273,14 +273,14 @@ def send_email(pdf_path: str, time_label: str):
 
     brief_type = "早报" if time_label == "morning" else "晚报"
     today = datetime.now()
-    subject = f"FRONTIER BRIEF · {brief_type} | {today.strftime('%Y/%m/%d')}"
+    subject = f"NEWS AGENT · {brief_type} | {today.strftime('%Y/%m/%d')}"
 
     msg = MIMEMultipart("mixed")
     msg["From"] = FROM_EMAIL
     msg["To"] = ", ".join(TO_EMAILS)
     msg["Subject"] = subject
 
-    text_body = f"请查收今日 FRONTIER BRIEF {brief_type} PDF。\n\nFRONTIER BRIEF · Tech · Capital · Geopolitics\n在事件影响市场之前理解它"
+    text_body = f"请查收今日 NEWS AGENT {brief_type} PDF。\n\nNEWS AGENT · Tech · Capital · Geopolitics\n在事件影响市场之前理解它"
     msg.attach(MIMEText(text_body, "plain", "utf-8"))
 
     with open(pdf_path, "rb") as f:
@@ -289,7 +289,7 @@ def send_email(pdf_path: str, time_label: str):
         encoders.encode_base64(pdf_attachment)
         pdf_attachment.add_header(
             "Content-Disposition",
-            f'attachment; filename="FRONTIER_BRIEF_{time_label.capitalize()}_{today.strftime("%Y%m%d")}.pdf"',
+            f'attachment; filename="NEWS_AGENT_{time_label.capitalize()}_{today.strftime("%Y%m%d")}.pdf"',
         )
         msg.attach(pdf_attachment)
 
@@ -324,7 +324,7 @@ def main():
     html = render_html(data, time_label)
 
     print("Generating PDF...")
-    pdf_path = f"/tmp/frontier_brief_{time_label}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    pdf_path = f"/tmp/news_agent_{time_label}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
     html_to_pdf(html, pdf_path)
 
     if no_email:

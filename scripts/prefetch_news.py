@@ -2,7 +2,7 @@
 """Fetch news and save the raw digest to a cache file for the agent to read."""
 import subprocess, sys, pathlib
 
-CACHE_FILE = pathlib.Path("/tmp/frontier_brief_news_cache.txt")
+CACHE_FILE = pathlib.Path("/tmp/news_agent_news_cache.txt")
 
 result = subprocess.run(
     [sys.executable, str(pathlib.Path(__file__).parent / "fetch_news.py")],

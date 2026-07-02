@@ -8,12 +8,12 @@
 
 PDF 转图看：
 ```bash
-pdftoppm -png -r 100 -f 1 -l 1 /tmp/frontier_brief_morning_*.pdf preview
+pdftoppm -png -r 100 -f 1 -l 1 /tmp/news_agent_morning_*.pdf preview
 ```
 
 或者渲染阶段的 HTML 直接截图（改版面调试时更快，不用等 PDF 导出）：
 ```bash
-npx playwright screenshot file:///tmp/frontier_brief_debug.html preview.png --viewport-size=1200,1600
+npx playwright screenshot file:///tmp/news_agent_debug.html preview.png --viewport-size=1200,1600
 ```
 
 ## 2. 肉眼检查
@@ -34,7 +34,7 @@ from playwright.sync_api import sync_playwright
 with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page()
-    page.goto("file:///tmp/frontier_brief_debug.html")
+    page.goto("file:///tmp/news_agent_debug.html")
 
     checks = page.evaluate("""
     () => {
