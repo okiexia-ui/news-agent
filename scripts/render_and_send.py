@@ -75,9 +75,14 @@ def render_html(data: dict, time_label: str) -> str:
         bp_html += f'<div class="bp-card"><div class="bp-n">{i+1:02d}</div><div class="bp-b"><div class="bp-tag {cls}">{item.get("tag","")}</div><div class="bp-title">{item.get("title","")}</div><div class="bp-desc">{item.get("desc","")}</div></div></div>'
     html = html.replace("__BIG_PICTURE__", bp_html)
 
-    # Quote
+    # Quote (evening uses the "一日总结" summary style: card background, no author line)
     q = data.get("quote", {})
-    html = html.replace("__QUOTE__", q.get("text", ""))
+    if time_label == "evening" or q.get("author") == "一日总结":
+        html = html.replace('<div class="qbar">', '<div class="qbar qbar-eve">')
+        html = html.replace('<span class="qa">—— __QUOTE_AUTHOR__</span>', '')
+        html = html.replace("__QUOTE__", f'📋 {q.get("text", "")}')
+    else:
+        html = html.replace("__QUOTE__", q.get("text", ""))
     html = html.replace("__QUOTE_AUTHOR__", q.get("author", ""))
 
     # Cross-signal
@@ -191,7 +196,7 @@ def render_html(data: dict, time_label: str) -> str:
 <div class="nc-meta" style="color:#7c3aed">👤 {paper.get("authors","")}</div>
 <div class="nc-l" style="font-size:9.5px">{paper.get("summary","")}</div>
 </div>'''
-        html = html.replace('<!-- WATCH + MARKET -->', arx_html + '<!-- WATCH + MARKET -->')
+        html = html.replace('<!-- WATCHLIST -->', arx_html + '<!-- WATCHLIST -->')
 
     # Watch list
     wl_html = ""
@@ -250,7 +255,12 @@ def html_to_pdf(html_content: str, pdf_path: str):
         with sync_playwright() as p:
             browser = p.chromium.launch()
             page = browser.new_page(viewport={"width": 1200, "height": 1600})
-            page.goto(f"file://{html_path}", wait_until="networkidle")
+            try:
+                # networkidle waits for Google Fonts; fall back if offline/blocked
+                page.goto(f"file://{html_path}", wait_until="networkidle", timeout=20000)
+            except Exception:
+                print("WARNING: networkidle timed out (webfonts unreachable?), rendering with fallback fonts")
+                page.goto(f"file://{html_path}", wait_until="load")
             page.pdf(path=pdf_path, format="A4", print_background=True, margin={"top": "0mm", "bottom": "0mm", "left": "0mm", "right": "0mm"})
             browser.close()
         print(f"PDF generated: {pdf_path}")
