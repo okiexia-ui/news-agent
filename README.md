@@ -1,6 +1,6 @@
 # News Agent · 新闻侠
 
-一份「科技 · 资本 · 地缘政治」主题的结构化日报生成器：抓新闻 → agent 生成结构化内容 → 赤陶暖色调 A4 排版 → 导出 PDF → 可选邮件发送。
+一份「科技 · 资本 · 地缘政治」主题的结构化日报生成器：抓新闻 → agent 生成结构化内容 →排版 → 导出 PDF → 可选邮件发送。(别管用就完了)
 
 作为 [Agent Skill](https://github.com/anthropics/skills) 使用（Claude Code / 其他兼容 agent runtime），也可以单独当命令行工具用。
 
@@ -75,10 +75,6 @@ news-agent/
 - `GMAIL_APP_PASSWORD` / `FROM_EMAIL` / `TO_EMAILS`——发邮件才需要，Gmail 要用「应用专用密码」而不是登录密码
 
 不发邮件的话，`render_and_send.py` 加 `--no-email` 参数即可，只导出 PDF 不需要配邮箱。
-
-## 为什么"生成结构化 JSON"这步不是脚本自动做的
-
-早期版本里这步是脚本调用一个特定 CLI（`hermes chat -q ...`）来完成的。这个仓库把这步显式交还给**当前运行 skill 的 agent 自己做**：不同 agent runtime 调用自身 LLM 能力的方式天差地别，脚本层硬编码某一种反而不可移植。`SKILL.md` 里给了完整的 JSON schema 和填写规则，agent 照着填就行——这也是 Claude Code 这类工具里 skill 的标准写法：机械步骤交给脚本，需要判断力的步骤留给 agent。
 
 ## License
 
