@@ -1,3 +1,5 @@
+<sub>🌐 <b>中文</b> · <a href="README.en.md">English</a></sub>
+
 # News Agent · 新闻侠
 
 一份「科技 · 资本 · 地缘政治」主题的结构化日报生成器：抓新闻 → agent 生成结构化内容 →排版 → 导出 PDF → 可选邮件发送。(别管用就完了)
