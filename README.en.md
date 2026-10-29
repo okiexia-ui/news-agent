@@ -14,7 +14,7 @@ Use it as an [Agent Skill](https://github.com/anthropics/skills) (Claude Code or
 ## Quick start
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/okiexia-ui/news-agent.git
 cd news-agent
 pip install -r requirements.txt
 python3 -m playwright install chromium

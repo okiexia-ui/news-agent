@@ -14,7 +14,7 @@
 ## 快速开始
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/okiexia-ui/news-agent.git
 cd news-agent
 pip install -r requirements.txt
 python3 -m playwright install chromium

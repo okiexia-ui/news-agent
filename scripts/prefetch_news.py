@@ -18,6 +18,8 @@ for ch in ['​', '‌', '‍', '﻿']:
     output = output.replace(ch, '')
 if result.returncode != 0:
     print(f"WARNING: fetch_news.py exited with code {result.returncode}: {result.stderr}", file=sys.stderr)
+    if not output.strip():
+        sys.exit(result.returncode)
 
 CACHE_FILE.write_text(output)
 print(f"Pre-fetched {len(output)} bytes of news data -> {CACHE_FILE}")
