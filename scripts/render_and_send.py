@@ -18,7 +18,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
+from html import escape
 import json
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -63,6 +64,10 @@ def _safe_items(items) -> list:
     return good
 
 
+def _text(value) -> str:
+    return escape(str(value))
+
+
 def render_html(data: dict, time_label: str) -> str:
     """Fill the NEWS AGENT HTML template with data."""
     html = TEMPLATE_PATH.read_text()
@@ -72,7 +77,7 @@ def render_html(data: dict, time_label: str) -> str:
     for i, item in enumerate(_safe_items(data.get("big_picture", []))):
         tag_map = {"技术突破": "bp-t1", "资本动向": "bp-t2", "基础设施": "bp-t3", "地缘风险": "bp-t4"}
         cls = tag_map.get(item.get("tag", ""), "bp-t1")
-        bp_html += f'<div class="bp-card"><div class="bp-n">{i+1:02d}</div><div class="bp-b"><div class="bp-tag {cls}">{item.get("tag","")}</div><div class="bp-title">{item.get("title","")}</div><div class="bp-desc">{item.get("desc","")}</div></div></div>'
+        bp_html += f'<div class="bp-card"><div class="bp-n">{i+1:02d}</div><div class="bp-b"><div class="bp-tag {cls}">{_text(item.get("tag",""))}</div><div class="bp-title">{_text(item.get("title",""))}</div><div class="bp-desc">{_text(item.get("desc",""))}</div></div></div>'
     html = html.replace("__BIG_PICTURE__", bp_html)
 
     # Quote (evening uses the "一日总结" summary style: card background, no author line)
@@ -80,15 +85,15 @@ def render_html(data: dict, time_label: str) -> str:
     if time_label == "evening" or q.get("author") == "一日总结":
         html = html.replace('<div class="qbar">', '<div class="qbar qbar-eve">')
         html = html.replace('<span class="qa">—— __QUOTE_AUTHOR__</span>', '')
-        html = html.replace("__QUOTE__", f'📋 {q.get("text", "")}')
+        html = html.replace("__QUOTE__", f'📋 {_text(q.get("text", ""))}')
     else:
-        html = html.replace("__QUOTE__", q.get("text", ""))
-    html = html.replace("__QUOTE_AUTHOR__", q.get("author", ""))
+        html = html.replace("__QUOTE__", _text(q.get("text", "")))
+    html = html.replace("__QUOTE_AUTHOR__", _text(q.get("author", "")))
 
     # Cross-signal
     cs_html = ""
     for item in _safe_items(data.get("cross_signal", [])):
-        cs_html += f'<div class="cross-item"><div class="ci-title">{item.get("title","")}</div><div class="ci-body">{item.get("body","")}</div></div>'
+        cs_html += f'<div class="cross-item"><div class="ci-title">{_text(item.get("title",""))}</div><div class="ci-body">{_text(item.get("body",""))}</div></div>'
     html = html.replace("__CROSS_SIGNAL__", cs_html)
 
     # News cards
@@ -104,12 +109,12 @@ def render_html(data: dict, time_label: str) -> str:
         ic = impact_map.get(item.get("impact", ""), "imp-m")
         cc = cred_map.get(item.get("credibility", ""), "cred-m")
         news_html += f'''<div class="nc">
-<div class="nc-top"><span class="nc-tag {tc}">{item.get("category","")}</span><div class="badge-group"><span class="imp-badge {ic}">{item.get("impact","")}</span><span class="cred-badge {cc}">📡 {item.get("credibility","")}</span></div></div>
-<div class="nc-title">{item.get("title","")}</div>
-<div class="nc-meta">{item.get("source","")} · {item.get("signal","")}</div>
-<div class="nc-l"><span class="nl">📋 事实：</span>{item.get("fact","")}</div>
-<div class="nc-l"><span class="nl">🎯 影响：</span>{item.get("impact_text","")}</div>
-<div class="nc-link">🔗 {item.get("url","")}</div>
+<div class="nc-top"><span class="nc-tag {tc}">{_text(item.get("category",""))}</span><div class="badge-group"><span class="imp-badge {ic}">{_text(item.get("impact",""))}</span><span class="cred-badge {cc}">📡 {_text(item.get("credibility",""))}</span></div></div>
+<div class="nc-title">{_text(item.get("title",""))}</div>
+<div class="nc-meta">{_text(item.get("source",""))} · {_text(item.get("signal",""))}</div>
+<div class="nc-l"><span class="nl">📋 事实：</span>{_text(item.get("fact",""))}</div>
+<div class="nc-l"><span class="nl">🎯 影响：</span>{_text(item.get("impact_text",""))}</div>
+<div class="nc-link">🔗 {_text(item.get("url",""))}</div>
 </div>'''
     html = html.replace("__NEWS_CARDS__", news_html)
 
@@ -118,13 +123,13 @@ def render_html(data: dict, time_label: str) -> str:
     for item in _safe_items(data.get("geopolitical", [])):
         geo_html += f'''<div class="geo">
 <div class="geo-tag">⚠ 高影响</div>
-<div class="geo-title">{item.get("title","")}</div>
-<div class="geo-src">{item.get("source","")} · {item.get("signal","")}</div>
+<div class="geo-title">{_text(item.get("title",""))}</div>
+<div class="geo-src">{_text(item.get("source",""))} · {_text(item.get("signal",""))}</div>
 <div class="geo-4">
-<div class="geo-4-item"><div class="g4l">发生了什么</div><div class="g4t">{item.get("what","")}</div></div>
-<div class="geo-4-item"><div class="g4l">为什么重要</div><div class="g4t">{item.get("why","")}</div></div>
-<div class="geo-4-item"><div class="g4l">市场影响</div><div class="g4t">{item.get("market","")}</div></div>
-<div class="geo-4-item"><div class="g4l">关注下一步</div><div class="g4t">{item.get("watch","")}</div></div>
+<div class="geo-4-item"><div class="g4l">发生了什么</div><div class="g4t">{_text(item.get("what",""))}</div></div>
+<div class="geo-4-item"><div class="g4l">为什么重要</div><div class="g4t">{_text(item.get("why",""))}</div></div>
+<div class="geo-4-item"><div class="g4l">市场影响</div><div class="g4t">{_text(item.get("market",""))}</div></div>
+<div class="geo-4-item"><div class="g4l">关注下一步</div><div class="g4t">{_text(item.get("watch",""))}</div></div>
 </div>
 </div>'''
     html = html.replace("__GEOPOLITICAL__", geo_html)
@@ -137,12 +142,12 @@ def render_html(data: dict, time_label: str) -> str:
         ic = impact_map.get(item.get("impact", ""), "imp-m")
         cc = cred_map.get(item.get("credibility", ""), "cred-m")
         mn_html += f'''<div class="nc">
-<div class="nc-top"><span class="nc-tag {tc}">{item.get("category","")}</span><div class="badge-group"><span class="imp-badge {ic}">{item.get("impact","")}</span><span class="cred-badge {cc}">📡 {item.get("credibility","")}</span></div></div>
-<div class="nc-title">{item.get("title","")}</div>
-<div class="nc-meta">{item.get("source","")} · {item.get("signal","")}</div>
-<div class="nc-l"><span class="nl">📋 事实：</span>{item.get("fact","")}</div>
-<div class="nc-l"><span class="nl">🎯 影响：</span>{item.get("impact_text","")}</div>
-<div class="nc-link">🔗 {item.get("url","")}</div>
+<div class="nc-top"><span class="nc-tag {tc}">{_text(item.get("category",""))}</span><div class="badge-group"><span class="imp-badge {ic}">{_text(item.get("impact",""))}</span><span class="cred-badge {cc}">📡 {_text(item.get("credibility",""))}</span></div></div>
+<div class="nc-title">{_text(item.get("title",""))}</div>
+<div class="nc-meta">{_text(item.get("source",""))} · {_text(item.get("signal",""))}</div>
+<div class="nc-l"><span class="nl">📋 事实：</span>{_text(item.get("fact",""))}</div>
+<div class="nc-l"><span class="nl">🎯 影响：</span>{_text(item.get("impact_text",""))}</div>
+<div class="nc-link">🔗 {_text(item.get("url",""))}</div>
 </div>'''
     if not mn_html:
         mn_html = "<div style='color:#888;font-size:11px;padding:8px;'>（今日无突出市场新闻）</div>"
@@ -158,7 +163,7 @@ def render_html(data: dict, time_label: str) -> str:
             cls = "prb-m"
         else:
             cls = "prb-l"
-        prob_html += f'<div class="prob-row"><span class="pr-name"><strong>{item.get("event","")}</strong></span><div class="pr-bar-wrap"><div class="pr-bar {cls}" style="width:{pct}px"></div><span class="pr-pct">{pct}%</span></div></div>'
+        prob_html += f'<div class="prob-row"><span class="pr-name"><strong>{_text(item.get("event",""))}</strong></span><div class="pr-bar-wrap"><div class="pr-bar {cls}" style="width:{pct}px"></div><span class="pr-pct">{pct}%</span></div></div>'
 
     # Scenarios
     scen_html = '<div class="scen-hdr">未来 30 天情景规划</div>'
@@ -166,7 +171,7 @@ def render_html(data: dict, time_label: str) -> str:
         t = item.get("type", "基准")
         si = {"乐观": "si-bull", "基准": "si-base", "悲观": "si-bear"}.get(t, "si-base")
         emoji = {"乐观": "🟢", "基准": "🔵", "悲观": "🔴"}.get(t, "🔵")
-        scen_html += f'<div class="scen-item"><span class="si-tag {si}">{emoji} {t}</span><span class="si-text">{item.get("text","")}</span></div>'
+        scen_html += f'<div class="scen-item"><span class="si-tag {si}">{emoji} {_text(t)}</span><span class="si-text">{_text(item.get("text",""))}</span></div>'
 
     html = html.replace("__PROB_SCENARIO__", f'<div class="ps-grid"><div class="prob-box">{prob_html}</div><div class="scen-box">{scen_html}</div></div>')
 
@@ -176,11 +181,11 @@ def render_html(data: dict, time_label: str) -> str:
     for item in community:
         tc = tag_map.get(item.get("category", ""), "nct1")
         com_html += f'''<div class="nc">
-<div class="nc-top"><span class="nc-tag {tc}">{item.get("category","")}</span><div class="badge-group"><span class="imp-badge imp-hot">💬 社区热议</span><span class="cred-badge cred-l">📡 低可信</span></div></div>
-<div class="nc-title">{item.get("title","")}</div>
-<div class="nc-meta">{item.get("source","")}</div>
-<div class="nc-l"><span class="nl">💡</span> {item.get("impact_text","")}</div>
-<div class="nc-link">🔗 {item.get("url","")}</div>
+<div class="nc-top"><span class="nc-tag {tc}">{_text(item.get("category",""))}</span><div class="badge-group"><span class="imp-badge imp-hot">💬 社区热议</span><span class="cred-badge cred-l">📡 低可信</span></div></div>
+<div class="nc-title">{_text(item.get("title",""))}</div>
+<div class="nc-meta">{_text(item.get("source",""))}</div>
+<div class="nc-l"><span class="nl">💡</span> {_text(item.get("impact_text",""))}</div>
+<div class="nc-link">🔗 {_text(item.get("url",""))}</div>
 </div>'''
     if not com_html:
         com_html = "<div style='color:#888;font-size:11px;padding:8px;'>（今日无突出社区讨论）</div>"
@@ -192,9 +197,9 @@ def render_html(data: dict, time_label: str) -> str:
         arx_html = '<div class="sh"><span class="sh-label">📄 ArXiv 论文精选</span><span class="sh-line"></span></div>'
         for paper in _safe_items(arxiv_items):
             arx_html += f'''<div class="nc" style="border-left:3px solid #7c3aed">
-<div class="nc-title">{paper.get("title","")}</div>
-<div class="nc-meta" style="color:#7c3aed">👤 {paper.get("authors","")}</div>
-<div class="nc-l" style="font-size:9.5px">{paper.get("summary","")}</div>
+<div class="nc-title">{_text(paper.get("title",""))}</div>
+<div class="nc-meta" style="color:#7c3aed">👤 {_text(paper.get("authors",""))}</div>
+<div class="nc-l" style="font-size:9.5px">{_text(paper.get("summary",""))}</div>
 </div>'''
         html = html.replace('<!-- WATCHLIST -->', arx_html + '<!-- WATCHLIST -->')
 
@@ -203,11 +208,11 @@ def render_html(data: dict, time_label: str) -> str:
     colors = ["wd1", "wd2", "wd3", "wd4"]
     for i, item in enumerate(_safe_items(data.get("watch_list", []))):
         c = colors[i % 4]
-        wl_html += f'<div class="wi"><span class="wd {c}"></span>{item.get("text","")}</div>'
+        wl_html += f'<div class="wi"><span class="wd {c}"></span>{_text(item.get("text",""))}</div>'
     html = html.replace("__WATCH_LIST__", wl_html)
 
     # Hashtags
-    ht_html = "\n".join([f'<span class="ht">{h}</span>' for h in data.get("hashtags", [])])
+    ht_html = "\n".join([f'<span class="ht">{_text(h)}</span>' for h in data.get("hashtags", [])])
     html = html.replace("__HASHTAGS__", ht_html)
 
     # Market dash
@@ -215,7 +220,7 @@ def render_html(data: dict, time_label: str) -> str:
     change_map = {"up": "m-up", "down": "m-down", "flat": "", "warn": "m-warn"}
     for item in _safe_items(data.get("market_data", [])):
         cc = change_map.get(item.get("change", ""), "")
-        md_html += f'<div class="mkt-item"><span class="mn">{item.get("name","")}</span><span class="mv {cc}">{item.get("value","")}</span></div>'
+        md_html += f'<div class="mkt-item"><span class="mn">{_text(item.get("name",""))}</span><span class="mv {cc}">{_text(item.get("value",""))}</span></div>'
     md_html += '</div>'
     html = html.replace("__MARKET_DASH__", md_html)
 
@@ -225,7 +230,7 @@ def render_html(data: dict, time_label: str) -> str:
         et = " ".join(str(v) for v in et.values() if isinstance(v, str))
     elif not isinstance(et, str):
         et = str(et)
-    html = html.replace("__EDITOR_TAKE__", et)
+    html = html.replace("__EDITOR_TAKE__", _text(et))
 
     # Date / Vol / Source
     today = datetime.now()
@@ -238,7 +243,8 @@ def render_html(data: dict, time_label: str) -> str:
     html = html.replace("__VOL__", f"VOL.{today.strftime('%m%d')}")
     brief_type = "早报" if time_label == "morning" else "晚报"
     html = html.replace("NEWS AGENT", f"NEWS AGENT · {brief_type}")
-    html = html.replace("__DATA_SOURCE__", f"数据采集 · {today.strftime('%Y-%m-%d %H:%M UTC')}")
+    collected_at = datetime.now(timezone.utc)
+    html = html.replace("__DATA_SOURCE__", f"数据采集 · {collected_at.strftime('%Y-%m-%d %H:%M UTC')}")
 
     return html
 
