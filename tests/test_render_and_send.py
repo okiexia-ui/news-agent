@@ -24,8 +24,45 @@ class RenderTests(unittest.TestCase):
             with self.subTest(label=label):
                 html = renderer.render_html({}, label)
                 self.assertFalse(re.search(r"__[A-Z_]+__", html))
-                self.assertIn("今日无突出市场新闻", html)
-                self.assertIn("今日无突出社区讨论", html)
+                for note in ("今日无突出信号", "今日无突出跨板块信号", "今日无突出要闻",
+                             "今日无突出地缘事件", "今日无突出市场新闻", "今日无概率评估",
+                             "今日无情景规划", "今日无突出社区讨论", "今日无重点观察"):
+                    self.assertIn(note, html)
+
+    def test_fallback_notes_disappear_when_sections_have_items(self):
+        html = renderer.render_html({
+            "geopolitical": [{"title": "g"}],
+            "probabilities": [{"event": "e", "pct": 40}],
+            "watch_list": [{"text": "w"}],
+        }, "morning")
+        self.assertNotIn("今日无突出地缘事件", html)
+        self.assertNotIn("今日无概率评估", html)
+        self.assertNotIn("今日无重点观察", html)
+        self.assertIn("今日无情景规划", html)
+
+    def test_probability_values_are_coerced_and_clamped(self):
+        cases = [(65, 65), (65.4, 65), ("65", 65), (" 72% ", 72), (150, 100), (-5, 0)]
+        for raw, expected in cases:
+            with self.subTest(raw=raw):
+                html = renderer.render_html({"probabilities": [{"event": "e", "pct": raw}]}, "morning")
+                self.assertIn(f'style="width:{expected}%"', html)
+                self.assertIn(f'<span class="pr-pct">{expected}%</span>', html)
+
+    def test_invalid_probability_rows_are_skipped(self):
+        for raw in (None, "high", True, [], float("nan"), float("inf")):
+            with self.subTest(raw=raw):
+                with patch("builtins.print"):
+                    html = renderer.render_html({"probabilities": [{"event": "bad", "pct": raw}]}, "morning")
+                self.assertNotIn('class="prob-row"', html)
+                self.assertIn("今日无概率评估", html)
+
+    def test_template_keeps_cards_whole_across_pages(self):
+        css = re.sub(r"/\*.*?\*/", "", renderer.TEMPLATE_PATH.read_text(), flags=re.S)
+        rule = re.search(r"([^{}]+)\{[^}]*break-inside:avoid", css)
+        self.assertIsNotNone(rule)
+        selectors = {s.strip() for s in rule.group(1).split(",")}
+        for cls in (".nc", ".geo", ".bp-card", ".cross-item", ".prob-box", ".scen-box", ".et"):
+            self.assertIn(cls, selectors)
 
     def test_all_plain_text_fields_are_escaped(self):
         text = '中文 <AI> & "quotes" \'single\''
@@ -43,7 +80,10 @@ class RenderTests(unittest.TestCase):
         for section, fields in sections.items():
             for field in fields:
                 with self.subTest(section=section, field=field):
-                    html = renderer.render_html({section: [{field: text}]}, "evening")
+                    item = {field: text}
+                    if section == "probabilities":
+                        item["pct"] = 50  # rows without a usable pct are skipped
+                    html = renderer.render_html({section: [item]}, "evening")
                     self.assertIn(escape(text), html)
                     self.assertNotIn(text, html)
         for field in ("text", "author"):
@@ -61,7 +101,7 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(html.count(escape(text)), 4)
         self.assertNotIn(text, html)
         self.assertIn('<strong>&lt;strong&gt;Research &amp; tools&lt;/strong&gt;</strong>', html)
-        self.assertIn('style="width:65px"', html)
+        self.assertIn('style="width:65%"', html)
         self.assertIn('class="nc-tag nct2"', html)
 
     def test_malformed_list_items_are_skipped(self):

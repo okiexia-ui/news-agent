@@ -68,6 +68,24 @@ def _text(value) -> str:
     return escape(str(value))
 
 
+def _empty(message: str) -> str:
+    """Fallback shown when a section has no items, so the heading isn't left dangling."""
+    return f'<div class="empty-note">（{message}）</div>'
+
+
+def _pct(value):
+    """Coerce an LLM-supplied probability (65, 65.0, "65", "65%") to an int in 0-100, or None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        value = value.strip().rstrip("%").strip()
+    try:
+        pct = round(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return max(0, min(100, pct))
+
+
 def render_html(data: dict, time_label: str) -> str:
     """Fill the NEWS AGENT HTML template with data."""
     html = TEMPLATE_PATH.read_text()
@@ -78,7 +96,7 @@ def render_html(data: dict, time_label: str) -> str:
         tag_map = {"技术突破": "bp-t1", "资本动向": "bp-t2", "基础设施": "bp-t3", "地缘风险": "bp-t4"}
         cls = tag_map.get(item.get("tag", ""), "bp-t1")
         bp_html += f'<div class="bp-card"><div class="bp-n">{i+1:02d}</div><div class="bp-b"><div class="bp-tag {cls}">{_text(item.get("tag",""))}</div><div class="bp-title">{_text(item.get("title",""))}</div><div class="bp-desc">{_text(item.get("desc",""))}</div></div></div>'
-    html = html.replace("__BIG_PICTURE__", bp_html)
+    html = html.replace("__BIG_PICTURE__", bp_html or _empty("今日无突出信号"))
 
     # Quote (evening uses the "一日总结" summary style: card background, no author line)
     q = data.get("quote", {})
@@ -94,7 +112,7 @@ def render_html(data: dict, time_label: str) -> str:
     cs_html = ""
     for item in _safe_items(data.get("cross_signal", [])):
         cs_html += f'<div class="cross-item"><div class="ci-title">{_text(item.get("title",""))}</div><div class="ci-body">{_text(item.get("body",""))}</div></div>'
-    html = html.replace("__CROSS_SIGNAL__", cs_html)
+    html = html.replace("__CROSS_SIGNAL__", cs_html or _empty("今日无突出跨板块信号"))
 
     # News cards
     news_html = ""
@@ -116,7 +134,7 @@ def render_html(data: dict, time_label: str) -> str:
 <div class="nc-l"><span class="nl">🎯 影响：</span>{_text(item.get("impact_text",""))}</div>
 <div class="nc-link">🔗 {_text(item.get("url",""))}</div>
 </div>'''
-    html = html.replace("__NEWS_CARDS__", news_html)
+    html = html.replace("__NEWS_CARDS__", news_html or _empty("今日无突出要闻"))
 
     # Geopolitical
     geo_html = ""
@@ -132,7 +150,7 @@ def render_html(data: dict, time_label: str) -> str:
 <div class="geo-4-item"><div class="g4l">关注下一步</div><div class="g4t">{_text(item.get("watch",""))}</div></div>
 </div>
 </div>'''
-    html = html.replace("__GEOPOLITICAL__", geo_html)
+    html = html.replace("__GEOPOLITICAL__", geo_html or _empty("今日无突出地缘事件"))
 
     # Market news (filtered)
     market_news = [n for n in _safe_items(data.get("news", [])) if isinstance(n, dict) and n.get("category") in ("资本市场", "货币政策", "市场")]
@@ -150,29 +168,34 @@ def render_html(data: dict, time_label: str) -> str:
 <div class="nc-link">🔗 {_text(item.get("url",""))}</div>
 </div>'''
     if not mn_html:
-        mn_html = "<div style='color:#888;font-size:11px;padding:8px;'>（今日无突出市场新闻）</div>"
+        mn_html = _empty("今日无突出市场新闻")
     html = html.replace("__MARKET_NEWS__", mn_html)
 
     # Probabilities
-    prob_html = '<div class="prob-hdr">概率评估</div>'
+    prob_rows = ""
     for item in _safe_items(data.get("probabilities", [])):
-        pct = item.get("pct", 50)
+        pct = _pct(item.get("pct"))
+        if pct is None:
+            print(f"Skipping probability with invalid pct: {item.get('pct')!r} ({str(item.get('event', ''))[:80]})")
+            continue
         if pct >= 55:
             cls = "prb-h"
         elif pct >= 30:
             cls = "prb-m"
         else:
             cls = "prb-l"
-        prob_html += f'<div class="prob-row"><span class="pr-name"><strong>{_text(item.get("event",""))}</strong></span><div class="pr-bar-wrap"><div class="pr-bar {cls}" style="width:{pct}px"></div><span class="pr-pct">{pct}%</span></div></div>'
+        prob_rows += f'<div class="prob-row"><span class="pr-name"><strong>{_text(item.get("event",""))}</strong></span><div class="pr-bar-wrap"><div class="pr-track"><div class="pr-bar {cls}" style="width:{pct}%"></div></div><span class="pr-pct">{pct}%</span></div></div>'
+    prob_html = '<div class="prob-hdr">概率评估</div>' + (prob_rows or _empty("今日无概率评估"))
 
     # Scenarios
-    scen_html = '<div class="scen-hdr">未来 30 天情景规划</div>'
+    scen_rows = ""
     for item in _safe_items(data.get("scenarios", [])):
         t = item.get("type", "基准")
         si = {"乐观": "si-bull", "基准": "si-base", "悲观": "si-bear"}.get(t, "si-base")
         emoji = {"乐观": "🟢", "基准": "🔵", "悲观": "🔴"}.get(t, "🔵")
-        scen_html += f'<div class="scen-item"><span class="si-tag {si}">{emoji} {_text(t)}</span><span class="si-text">{_text(item.get("text",""))}</span></div>'
+        scen_rows += f'<div class="scen-item"><span class="si-tag {si}">{emoji} {_text(t)}</span><span class="si-text">{_text(item.get("text",""))}</span></div>'
 
+    scen_html = '<div class="scen-hdr">未来 30 天情景规划</div>' + (scen_rows or _empty("今日无情景规划"))
     html = html.replace("__PROB_SCENARIO__", f'<div class="ps-grid"><div class="prob-box">{prob_html}</div><div class="scen-box">{scen_html}</div></div>')
 
     # Community
@@ -188,7 +211,7 @@ def render_html(data: dict, time_label: str) -> str:
 <div class="nc-link">🔗 {_text(item.get("url",""))}</div>
 </div>'''
     if not com_html:
-        com_html = "<div style='color:#888;font-size:11px;padding:8px;'>（今日无突出社区讨论）</div>"
+        com_html = _empty("今日无突出社区讨论")
     html = html.replace("__COMMUNITY__", com_html)
 
     # ArXiv papers (evening only)
@@ -209,7 +232,7 @@ def render_html(data: dict, time_label: str) -> str:
     for i, item in enumerate(_safe_items(data.get("watch_list", []))):
         c = colors[i % 4]
         wl_html += f'<div class="wi"><span class="wd {c}"></span>{_text(item.get("text",""))}</div>'
-    html = html.replace("__WATCH_LIST__", wl_html)
+    html = html.replace("__WATCH_LIST__", wl_html or _empty("今日无重点观察"))
 
     # Hashtags
     ht_html = "\n".join([f'<span class="ht">{_text(h)}</span>' for h in data.get("hashtags", [])])
