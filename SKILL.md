@@ -116,7 +116,7 @@ python3 scripts/render_and_send.py /tmp/news_agent_data.json morning
 
 | 变量 | 用途 | 必需？ |
 |------|------|--------|
-| `NEWSAPI_KEY` | newsapi.org 的 key，供 `fetch_news.py` 用 | 抓新闻必需 |
+| `NEWSAPI_KEY` | newsapi.org 的 key，配了会多一路 NewsAPI 补充源 | 可选（不配也能抓新闻） |
 | `GMAIL_APP_PASSWORD` | Gmail 应用专用密码（不是登录密码），16 位 | 发邮件必需 |
 | `FROM_EMAIL` | 发件邮箱 | 发邮件必需 |
 | `TO_EMAILS` | 收件邮箱，逗号分隔 | 发邮件必需 |
