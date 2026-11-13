@@ -2,7 +2,7 @@
 
 # News Agent · 新闻侠
 
-A structured daily-brief generator for tech, capital markets, and geopolitics: fetch news → the agent writes structured content → layout → PDF export → optional email delivery. (It just works.)
+A structured daily-brief generator for tech, capital markets, and geopolitics: fetch news → the agent writes structured content → layout → PDF export → optional email delivery.
 
 Use it as an [Agent Skill](https://github.com/anthropics/skills) (Claude Code or any compatible agent runtime), or run it as a plain command-line tool.
 
@@ -33,11 +33,30 @@ Or run it manually from the command line:
 
 ```bash
 python3 scripts/prefetch_news.py
-# produce /tmp/news_agent_data.json by hand or by other means (schema in SKILL.md)
+# read the printed news_cache.json path and produce /tmp/news_agent_data.json (schema in SKILL.md)
+# copy run_id; article_urls lists only cached articles actually used in this brief
 python3 scripts/render_and_send.py /tmp/news_agent_data.json morning --no-email
 ```
 
 > **Note on language**: the default brief content is written in Chinese (the JSON-generation rules in `SKILL.md` say so). For an English brief, tell your agent to generate the JSON in English instead — the template and renderer are language-agnostic except for a few fixed section labels.
+
+Try the layout without fetching news or sending email (demonstration data only):
+
+```bash
+python3 scripts/render_and_send.py examples/brief.sample.json evening --no-email --output /tmp/news-agent-sample.pdf
+```
+
+## Provenance and failure handling
+
+- Market values require an HTTP(S) source URL, an offset-aware data timestamp and a unit. Incomplete values display as unavailable. Never substitute a model's remembered or estimated price. Metadata enables traceability; it does not verify the source's factual accuracy.
+- Forecasts are optional and labeled subjective, with evidence and a time horizon.
+- Each RSS/API task reports status, article count, elapsed time and errors. Six workers run concurrently; requests have up to two attempts of at most six seconds each, a 40-second source budget and a 240-second overall prefetch subprocess timeout.
+- All-source failure or invalid output returns nonzero and preserves the last good cache. Partial coverage is explicitly marked degraded. Successful collection with no new articles is a separate outcome.
+- Fetching or selecting an article never consumes it. Only URLs actually used in a successfully generated PDF are marked rendered. Email delivery is recorded separately after successful submission.
+
+State defaults to `~/.cache/news-agent`; override `NEWS_AGENT_STATE_DIR` in the environment or `.env`. All pipeline steps must use the same directory. `news_cache.json` is authoritative, `news_cache.txt` is a readable companion, `fetch_status.json` describes the latest attempt, and `state.sqlite3` tracks articles/runs. State is retained for 30 days.
+
+The legacy `/tmp/news_agent_seen_urls.txt` is intentionally not imported, so the first run after upgrading may repeat previously published stories. Manual JSON remains usable, but market values without provenance are hidden. Omit both `run_id` and `article_urls` for manual, untracked briefs. After email failure, retry with the original JSON; there is no automatic resend or exactly-once SMTP guarantee.
 
 ## Directory layout
 
@@ -47,8 +66,9 @@ news-agent/
 ├── templates/
 │   └── news_agent.html         # A4 HTML template with __PLACEHOLDER__ slots
 ├── scripts/
-│   ├── fetch_news.py           # aggregates 17 sources (16 keyless + optional NewsAPI), see "News sources"
+│   ├── fetch_news.py           # RSS/API aggregation, selection and per-source health
 │   ├── prefetch_news.py        # runs fetch_news.py and writes the cache file
+│   ├── news_state.py           # SQLite state, URL normalization and atomic cache writes
 │   └── render_and_send.py      # JSON → HTML → PDF (Playwright) → optional email
 ├── references/
 │   ├── design-system.md        # palette / typography / placeholder list / design decisions (Chinese)
@@ -80,6 +100,15 @@ See `.env.example`; everything is optional:
 
 If you don't send email, pass `--no-email` to `render_and_send.py` and no mail settings are needed.
 
+## Verification
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+Offline tests cover source failures, cache preservation, deduplication, dates, market provenance, rendering and delivery state. Live source availability is reported for each fetch.
+
 ## License
 
 MIT, see [LICENSE](LICENSE).
+

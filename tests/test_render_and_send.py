@@ -16,7 +16,7 @@ class RenderTests(unittest.TestCase):
             html = renderer.render_html({}, "morning")
         self.assertIn("2026年01月02日 星期五", html)
         self.assertIn("VOL.0102", html)
-        self.assertIn("数据采集 · 2026-01-01 17:30 UTC", html)
+        self.assertIn("生成时间 · 2026-01-01 17:30 UTC", html)
         self.assertEqual(clock.now.call_args_list[1].args, (timezone.utc,))
 
     def test_empty_payload_has_no_placeholders(self):
@@ -83,6 +83,8 @@ class RenderTests(unittest.TestCase):
                     item = {field: text}
                     if section == "probabilities":
                         item["pct"] = 50  # rows without a usable pct are skipped
+                    if section == "market_data":
+                        item.update(source_url="https://example.com/quote", as_of="2026-11-13T12:00:00+08:00", unit="points")
                     html = renderer.render_html({section: [item]}, "evening")
                     self.assertIn(escape(text), html)
                     self.assertNotIn(text, html)
@@ -113,3 +115,4 @@ class RenderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -1,0 +1,36 @@
+{
+  "big_picture": [
+    {"tag": "技术突破", "title": "示例简报：可追溯的信息", "desc": "本文件仅演示排版与数据结构，所有事件、数字和概率均为示例，不代表实时新闻或行情。"},
+    {"tag": "资本动向", "title": "数值附带来源与时间", "desc": "行情卡显示单位、来源链接和原始数据时点。无法查证的项目显示暂无数据。"},
+    {"tag": "基础设施", "title": "抓取、生成、发送分别记录", "desc": "只有日报成功生成后，实际采用的文章才进入去重状态。"},
+    {"tag": "地缘风险", "title": "识别覆盖范围的局限", "desc": "部分新闻源不可用时，抓取报告明确记录来源故障，保留其他正常来源。"}
+  ],
+  "quote": {"text": "示例内容：有据可查的事实与主观分析分开呈现。", "author": "一日总结"},
+  "cross_signal": [
+    {"title": "① 新闻 × 来源", "body": "示例：同一事件的独立报道可提供额外线索，同一家媒体的重复报道不会重复加分。"},
+    {"title": "② 数据 × 时间", "body": "示例：保留数据时点，避免把历史收盘数据误读为实时价格。"}
+  ],
+  "news": [
+    {"category": "前沿科技", "impact": "中影响", "credibility": "中可信", "title": "示例：Research on <AI> & tools", "source": "示例来源", "signal": "排版测试", "fact": "这是一条虚构的排版示例。尖括号、引号和 & 符号应按普通文字显示。", "impact_text": "该示例用于检查正文换行、字符转义与跨页布局，不构成事实陈述。", "url": "https://example.com/demo/technology"},
+    {"category": "资本市场", "impact": "中影响", "credibility": "中可信", "title": "示例：市场数据的来源与时效", "source": "示例来源", "signal": "排版测试", "fact": "下方示例指数的数值仅用于验证格式，不能作为真实行情使用。", "impact_text": "在生产简报中，应填入可核实的数据和与之对应的来源链接。", "url": "https://example.com/demo/markets"},
+    {"category": "开源", "impact": "社区热度", "credibility": "低可信", "title": "示例：社区讨论需要独立核实", "source": "示例社区", "signal": "讨论热度", "fact": "社区讨论是一种线索，不自动代表已经证实的新闻。", "impact_text": "应核实原始材料后再形成事实判断。", "url": "https://example.com/demo/community"}
+  ],
+  "geopolitical": [
+    {"title": "示例：保留正常的贸易协议新闻", "source": "示例来源", "signal": "筛选测试", "what": "包含 trade deal 的正常新闻不再被促销关键词误删。", "why": "购物优惠与国际贸易协议表达的含义不同。", "market": "这是一条软件行为说明，不是市场事件预测。", "watch": "依据原始报道核实相关事实和发布时间。"}
+  ],
+  "probabilities": [
+    {"event": "示例情景 A", "pct": 65, "basis": "仅演示概率条，不来自预测模型", "horizon": "示例 30 天"},
+    {"event": "示例情景 B", "pct": 85, "basis": "仅演示概率条宽度", "horizon": "示例 30 天"},
+    {"event": "示例情景 C", "pct": 95, "basis": "仅演示 85% 与 95% 的差异", "horizon": "示例 30 天"}
+  ],
+  "scenarios": [{"type": "基准", "text": "仅为排版示例，不提供实际预测。"}],
+  "watch_list": [{"text": "确认来源、事件时间及文章采用清单。"}],
+  "market_data": [
+    {"name": "演示指数", "value": "123.45", "unit": "points", "change": "up", "source_url": "https://example.com/demo/quote", "as_of": "2026-11-13T12:00:00+08:00"},
+    {"name": "演示汇率", "value": "0.00", "unit": "DEMO", "change": "flat", "source_url": "https://example.com/demo/fx", "as_of": "2026-11-13T04:00:00Z"},
+    {"name": "缺失数据示例", "value": null, "unit": "points", "change": "warn", "source_url": null, "as_of": null}
+  ],
+  "editor_take": "本简报全部为演示内容。行情中的 example.com 链接用于测试追溯信息展示，并未提供真实行情。生产使用时须由运行技能的 Agent 核实来源。",
+  "hashtags": ["#示例", "#非实时数据"],
+  "arxiv": [{"title": "示例论文：可靠的信息处理流程", "authors": "示例作者", "summary": "本文条目仅用于验证晚报论文栏目是否正常显示。"}]
+}

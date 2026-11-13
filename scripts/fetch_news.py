@@ -1,503 +1,430 @@
 #!/usr/bin/env python3
-"""News aggregator. Keyless sources: HN + Reddit + arXiv + RSS (Economist/BBC/Bloomberg/
-CNBC/TechCrunch/Verge/Ars/Wired/MIT TR/Guardian/Al Jazeera/NYT/NPR). Optional: NewsAPI."""
-import json, os, ssl, sys, time, urllib.request, urllib.error, urllib.parse, html, re, pathlib, email.utils
-from datetime import datetime, timezone, timedelta
+"""Collect attributed news with bounded requests and explicit source health."""
+import argparse
+import email.utils
+import html
+import json
+import os
+import re
+import ssl
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
-# macOS python.org builds ship without a wired-up CA bundle; use certifi when present
+if __package__:
+    from .news_state import NewsState, canonical_url
+else:
+    from news_state import NewsState, canonical_url
+
 try:
     import certifi
-    _ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+    SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 except ImportError:
-    _ssl_ctx = ssl.create_default_context()
-urllib.request.install_opener(urllib.request.build_opener(urllib.request.HTTPSHandler(context=_ssl_ctx)))
+    SSL_CONTEXT = ssl.create_default_context()
 
-# NewsAPI is optional: without a key that source is skipped, all RSS/API sources still run
-NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY") or ""
-if not NEWSAPI_KEY:
-    env_path = pathlib.Path(__file__).resolve().parent.parent / ".env"
-    if env_path.exists():
-        for line in env_path.read_text().splitlines():
-            if line.startswith("NEWSAPI_KEY="):
-                NEWSAPI_KEY = line.strip().split("=", 1)[1].strip('"').strip("'")
-                break
+ATOM = "{http://www.w3.org/2005/Atom}"
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+STOP_WORDS = {"the", "a", "an", "is", "are", "was", "were", "to", "of", "in", "for", "on", "and", "or", "with"}
+# A trade deal or acquisition is news. Match shopping context, not the word "deal".
+JUNK_RE = re.compile(r"promo code|coupon|% off|black friday|prime day|gift guide|"
+                     r"\b(?:shopping|laptop|headphone|phone|amazon|best tech) deals?\b", re.I)
+MARKET_KEYWORDS = ["stock", "market", "nvidia", "semiconductor", "chip", "fed", "federal reserve",
+                   "interest rate", "inflation", "ipo", "merger", "acquisition", "valuation",
+                   "earnings", "trade war", "tariff", "sanction", "export control"]
 
-if not NEWSAPI_KEY:
-    print("WARNING: NEWSAPI_KEY not set - skipping NewsAPI, using keyless sources only.", file=sys.stderr)
-TIER_1 = {"Reuters", "AP News", "Bloomberg", "Financial Times", "BBC News", "The Economist",
-          "The Guardian", "New York Times"}
-TIER_2 = {"TechCrunch", "The Verge", "Wired", "Ars Technica", "CNBC", "NPR",
-          "MIT Technology Review", "Nature", "Al Jazeera"}
-TIER_3 = {"HackerNews", "Reddit"}
-ALL_TRUSTED = TIER_1 | TIER_2
 
-# ── Freshness helper ──
-NOW_UTC = datetime.now(timezone.utc)
+def load_key():
+    key = os.environ.get("NEWSAPI_KEY", "")
+    if key:
+        return key
+    env = Path(__file__).resolve().parents[1] / ".env"
+    if env.exists():
+        for line in env.read_text(encoding="utf-8").splitlines():
+            key_name, sep, value = line.strip().partition("=")
+            if sep and key_name.strip() == "NEWSAPI_KEY":
+                return value.strip().strip("\"'")
+    return ""
 
-def parse_date_rfc2822(s):
-    """Parse RSS pubDate ('Mon, 01 Jun 2026 12:00:00 GMT') or ISO 8601 ('2026-06-20T12:00:00Z')
-    -> datetime(utc) or None. Always returns offset-aware datetimes."""
-    if not s:
+
+def parse_date(value):
+    if not isinstance(value, str) or not value.strip():
         return None
-    # Try RFC 2822 (RSS feeds)
     try:
-        dt = email.utils.parsedate_to_datetime(s)
-        if dt is not None and dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except Exception:
-        pass
-    # Try ISO 8601 (NewsAPI)
-    try:
-        dt = datetime.strptime(s[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
-        return dt
-    except Exception:
-        pass
-    # Try just the date
-    try:
-        return datetime.strptime(s[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    except Exception:
-        return None
-
-def is_fresh(article, max_hours):
-    """Check if article's 'published' field is within max_hours of now."""
-    pub = article.get("published", "")
-    if not pub:
-        return True  # keep if no date
-    try:
-        dt = parse_date_rfc2822(pub)
-        if dt is None:
-            return True  # keep on parse failure
-        return (NOW_UTC - dt) < timedelta(hours=max_hours)
-    except Exception:
-        return True  # keep on exception
-
-# ── URL dedup ──
-SEEN_FILE = pathlib.Path("/tmp/news_agent_seen_urls.txt")
-def load_seen_urls():
-    if SEEN_FILE.exists():
-        return set(u for u in SEEN_FILE.read_text().strip().split("\n") if u.strip())
-    return set()
-
-def save_seen_urls(urls):
-    SEEN_FILE.write_text("\n".join(sorted(urls)))
-
-MARKET_KEYWORDS = ["stock","market","NVIDIA","semiconductor","chip","Fed","Federal Reserve",
-    "interest rate","inflation","IPO","merger","acquisition","valuation",
-    "earnings","trade war","tariff","sanction","export control"]
-
-def fetch_json(url, timeout=6):
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "NewsAgent/1.0"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read().decode())
-    except: return {"_error": "timeout"}
-
-def napi_url(endpoint, params):
-    return f"https://newsapi.org/v2/{endpoint}?{params}&apiKey={NEWSAPI_KEY}"
-
-def source_tier(n):
-    if n in TIER_1: return 1
-    if n in TIER_2: return 2
-    if n in TIER_3: return 3
-    return 0
-
-def cred_score(t): return {1:40, 2:25, 3:10, 0:0}[t]
-def mkt_impact(t):
-    return min(sum(10 for kw in MARKET_KEYWORDS if kw.lower() in (t or "").lower()), 20)
-
-def guess_section(a):
-    t = ((a.get("title")or"")+" "+(a.get("desc")or"")).lower()
-    s = a.get("source","")
-    geo=["china","us","tariff","sanction","export control","regulation","military","ukraine","russia","congress","trade war"]
-    eco=["stock","market","nvidia","semiconductor","chip","fed","inflation","economy","valuation","billion","earnings"]
-    ai=["ai","artificial intelligence","machine learning","openai","anthropic","llm","gpt","claude","gemini","agent"]
-    if s in {"Reuters","AP News","BBC News"}:
-        return "geopolitics" if any(k in t for k in geo) else "general"
-    if s in {"Bloomberg","Financial Times","CNBC"}: return "economics"
-    if s in {"TechCrunch","The Verge","Wired","Ars Technica","MIT Technology Review"}: return "technology"
-    if s == "The Economist": return "economics"
-    gs = sum(2 for k in geo if k in t)
-    es = sum(2 for k in eco if k in t)
-    as_ = sum(2 for k in ai if k in t)
-    if as_ >= gs and as_ >= es and as_ >= 2: return "technology"
-    if gs >= es and gs >= 2: return "geopolitics"
-    if es >= 2: return "economics"
-    return "general"
-
-# ── Source: NewsAPI (supplemental, often stale on free tier) ──
-def fetch_newsapi():
-    results = []
-    for cat in ["technology","business","general"]:
-        url = napi_url("top-headlines", f"category={cat}&language=en&pageSize=20")
-        data = fetch_json(url)
-        for a in data.get("articles",[]):
-            src = a.get("source",{}).get("name","")
-            if src not in ALL_TRUSTED: continue
-            results.append({"source":src,"tier":source_tier(src),
-                "section":guess_section({"source":src,"title":a["title"],"desc":a.get("description","")}),
-                "title":a["title"],"desc":a.get("description","")or"","url":a["url"],
-                "published":(a.get("publishedAt")or"")[:10]})
-    queries = [("AI","technology"),("semiconductor","geopolitics"),("OpenAI","technology"),
-               ("NVIDIA","economics"),("AI regulation","geopolitics"),("China tech","geopolitics"),
-               ("machine learning","technology"),("sanctions","geopolitics"),("defense","geopolitics"),
-               ("election","geopolitics"),("foreign policy","geopolitics"),("Iran","geopolitics"),
-               ("Ukraine","geopolitics"),("China","geopolitics"),("Middle East","geopolitics"),
-               ("tariff","economics"),("trade war","geopolitics"),("IPO","economics"),
-               ("Federal Reserve","economics")]
-    seen = {a["url"] for a in results}
-    for q,ds in queries:
-        url = napi_url("everything", f"q={urllib.parse.quote(q)}&language=en&pageSize=3&sortBy=publishedAt")
-        data = fetch_json(url, timeout=6)
-        for a in data.get("articles",[]):
-            src = a.get("source",{}).get("name","")
-            u = a["url"]
-            if src not in ALL_TRUSTED or u in seen: continue
-            seen.add(u)
-            results.append({"source":src,"tier":source_tier(src),
-                "section":guess_section({"source":src,"title":a["title"],"desc":a.get("description","")}),
-                "title":a["title"],"desc":a.get("description","")or"","url":u,
-                "published":(a.get("publishedAt")or"")[:10]})
-    # Date-filter and cap NewsAPI results
-    results = [r for r in results if is_fresh(r, 48)]
-    return results[:30]
-
-# ── Source: HackerNews (consistently fresh) ──
-def fetch_hackernews():
-    results = []
-    ids = fetch_json("https://hacker-news.firebaseio.com/v0/topstories.json")
-    if isinstance(ids, list):
-        for sid in ids[:25]:
-            item = fetch_json(f"https://hacker-news.firebaseio.com/v0/item/{sid}.json")
-            if item and item.get("type")=="story" and item.get("title"):
-                results.append({"source":"HackerNews","tier":3,"section":"community",
-                    "title":item["title"],
-                    "desc":f"Score:{item.get('score',0)}|Comments:{item.get('descendants',0)}",
-                    "url":item.get("url")or f"https://news.ycombinator.com/item?id={sid}",
-                    "published":datetime.fromtimestamp(item.get("time",0),tz=timezone.utc
-                        ).strftime("%Y-%m-%d"),"_score":item.get("score",0)})
-            time.sleep(0.05)
-    results.sort(key=lambda x:x.get("_score",0),reverse=True)
-    return results[:12]
-
-# ── Source: Reddit ──
-def fetch_reddit():
-    results = []
-    for sub in ["artificial","MachineLearning"]:
+        dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
         try:
-            req = urllib.request.Request(f"https://www.reddit.com/r/{sub}/hot.json?limit=12",
-                headers={"User-Agent":"NewsAgent/1.0"})
-            with urllib.request.urlopen(req, timeout=6) as r:
-                for post in json.loads(r.read().decode()).get("data",{}).get("children",[]):
-                    d = post.get("data",{})
-                    if d.get("stickied"): continue
-                    results.append({"source":f"Reddit r/{sub}","tier":3,"section":"community",
-                        "title":d.get("title",""),
-                        "desc":f"Score:{d.get('score',0)}|Comments:{d.get('num_comments',0)}",
-                        "url":f"https://reddit.com{d.get('permalink','')}",
-                        "published":datetime.fromtimestamp(d.get("created_utc",0),tz=timezone.utc
-                            ).strftime("%Y-%m-%d"),"_score":d.get("score",0)})
-        except: pass
-        time.sleep(0.3)
-    results.sort(key=lambda x:x.get("_score",0),reverse=True)
-    return results[:8]
+            dt = email.utils.parsedate_to_datetime(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
 
-# ── Source: arXiv ──
-def fetch_arxiv():
-    results = []
-    url="http://export.arxiv.org/api/query?search_query=cat:cs.AI+OR+cat:cs.LG&sortBy=submittedDate&sortOrder=descending&max_results=10"
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent":"NewsAgent/1.0"})
-        with urllib.request.urlopen(req, timeout=8) as r:
-            data = r.read().decode()
-        import xml.etree.ElementTree as ET
-        ns={"a":"http://www.w3.org/2005/Atom","arxiv":"http://arxiv.org/schemas/atom"}
-        for entry in ET.fromstring(data).findall("a:entry",ns):
-            title=html.unescape(" ".join(entry.find("a:title",ns).text.strip().split()))
-            summary=html.unescape(" ".join(entry.find("a:summary",ns).text.strip().split()[:40]))
-            link=entry.find("a:id",ns).text
-            pub=entry.find("a:published",ns).text[:10]
-            authors=[au.find("a:name",ns).text for au in entry.findall("a:author",ns) if au.find("a:name",ns) is not None]
-            results.append({"source":"arXiv","tier":3,"section":"research",
-                "title":title,"desc":summary+"...","url":link,"published":pub,
-                "_authors":", ".join(authors[:3])})
-    except: pass
-    return results
 
-# ── Source: Economist RSS (podcast feeds, editorial signal) ──
-def fetch_economist_rss():
-    results=[]
-    for name,url in [
-        ("The Economist Weekly","https://feeds.economist.com/v1/rss/weekly/58f882cb-21c4-4f19-aa4e-fc3b425d2e9d"),
-        ("The Intelligence","https://feeds.economist.com/v1/rss/the-intelligence/b41cc30e-db0c-4a90-a773-02a6817ca53a"),
-        ("The World in Brief","https://feeds.economist.com/v1/rss/the-world-in-brief/558c580d-7a74-40b4-8c9e-e55a79022c4b"),
-    ]:
+def is_fresh(article, max_hours, now=None):
+    now = now or datetime.now(timezone.utc)
+    dt = parse_date(article.get("published"))
+    # Missing dates remain explicit in the digest, never replaced with today's date.
+    return dt is None or -timedelta(minutes=5) <= now - dt <= timedelta(hours=max_hours)
+
+
+def has_keyword(text, keyword):
+    return bool(re.search(r"(?<!\w)" + re.escape(keyword) + r"(?!\w)", text, re.I))
+
+
+def guess_section(article):
+    text = (article.get("title", "") + " " + article.get("desc", "")).lower()
+    groups = {
+        "geopolitics": ["china", "us", "tariff", "sanction", "export control", "military",
+                        "ukraine", "russia", "congress", "trade war"],
+        "economics": MARKET_KEYWORDS,
+        "technology": ["ai", "artificial intelligence", "machine learning", "openai",
+                       "anthropic", "llm", "gpt", "claude", "gemini", "agent"],
+    }
+    scores = {section: sum(has_keyword(text, word) for word in words) for section, words in groups.items()}
+    return max(scores, key=scores.get) if any(scores.values()) else "general"
+
+
+class ResponseTooLarge(ValueError):
+    pass
+
+
+def error_label(exc):
+    # Avoid printing request URLs: NewsAPI URLs contain a credential.
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"HTTP {exc.code}"
+    if isinstance(exc, (TimeoutError, urllib.error.URLError)):
+        return "network timeout or connection failure"
+    if isinstance(exc, ResponseTooLarge):
+        return "response exceeds 8 MiB limit"
+    if isinstance(exc, (ET.ParseError, ValueError, UnicodeError)):
+        return "invalid response format"
+    return type(exc).__name__
+
+
+def request_bytes(url, deadline):
+    """At most two attempts, six seconds each, within the source's total budget."""
+    for attempt in range(2):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("source deadline exceeded")
         try:
-            req=urllib.request.Request(url,headers={"User-Agent":"NewsAgent/1.0"})
-            with urllib.request.urlopen(req,timeout=8) as r:
-                data=r.read().decode()
-            import xml.etree.ElementTree as ET
-            ns={"itunes":"http://www.itunes.com/dtds/podcast-1.0.dtd"}
-            tag = {"The Economist Weekly":"weekly","The Intelligence":"intel","The World in Brief":"brief"}[name]
-            for item in ET.fromstring(data).findall(".//item")[:30]:
-                t=item.findtext("title","")
-                s=""
-                if tag=="weekly":
-                    s=re.sub(r'<[^>]+>','',(item.findtext("itunes:summary","",ns)or"")).strip()
-                elif tag=="intel":
-                    s=re.sub(r'<[^>]+>','',(item.findtext("itunes:summary","",ns)or"")).strip()[:200]
-                else:
-                    s=re.sub(r'<[^>]+>','',(item.findtext("description","")or"")).strip()[:200]
-                pd=item.findtext("pubDate","")
-                lk=item.findtext("link","")
-                results.append({"source":name,"tag":tag,"title":t,"desc":s,"url":lk,"section":"economist_daily","published":pd[:31]if pd else ""})
-        except: pass
-    return results[:15]  # limit per source
+            req = urllib.request.Request(url, headers={"User-Agent": "NewsAgent/1.1"})
+            with urllib.request.urlopen(req, timeout=min(6, remaining), context=SSL_CONTEXT) as response:
+                content = response.read(MAX_RESPONSE_BYTES + 1)
+                if len(content) > MAX_RESPONSE_BYTES:
+                    raise ResponseTooLarge("response exceeds 8 MiB limit")
+                return content
+        except (urllib.error.URLError, TimeoutError) as exc:
+            retryable = not isinstance(exc, urllib.error.HTTPError) or exc.code == 429 or exc.code >= 500
+            if isinstance(exc, urllib.error.HTTPError):
+                exc.close()
+            if attempt or not retryable or deadline - time.monotonic() < 0.3:
+                raise
+            time.sleep(0.2)
 
-# ── Source: BBC News RSS (direct, more timely than NewsAPI) ──
-def fetch_bbc_rss():
-    results = []
-    feeds = [
-        ("BBC News","https://feeds.bbci.co.uk/news/rss.xml"),
-        ("BBC Technology","https://feeds.bbci.co.uk/news/technology/rss.xml"),
-    ]
-    for name, url in feeds:
+
+class Reader:
+    def __init__(self, budget=40):
+        self.deadline = time.monotonic() + budget
+        self.errors = []
+
+    def read(self, url, parser):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent":"NewsAgent/1.0"})
-            with urllib.request.urlopen(req, timeout=8) as r:
-                data = r.read().decode()
-            import xml.etree.ElementTree as ET
-            for item in list(ET.fromstring(data).findall(".//item"))[:20]:
-                t = item.findtext("title","")
-                d = re.sub(r'<[^>]+>','',(item.findtext("description","")or"")).strip()[:200]
-                pd = item.findtext("pubDate","")
-                lk = item.findtext("link","")
-                results.append({"source":name,"tier":1,"section":"general",
-                    "title":t,"desc":d,"url":lk,"published":pd[:31] if pd else ""})
-        except:
-            pass
-    return results[:20]
+            return parser(request_bytes(url, self.deadline))
+        except Exception as exc:
+            self.errors.append(error_label(exc))
+            raise
 
-# ── Source: Bloomberg RSS (direct, fresh markets + tech) ──
-def fetch_bloomberg_rss():
-    results = []
-    feeds = [
-        ("Bloomberg","https://feeds.bloomberg.com/markets/news.rss"),
-        ("Bloomberg","https://feeds.bloomberg.com/technology/news.rss"),
-    ]
-    for name, url in feeds:
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent":"NewsAgent/1.0"})
-            with urllib.request.urlopen(req, timeout=8) as r:
-                data = r.read().decode()
-            import xml.etree.ElementTree as ET
-            for item in list(ET.fromstring(data).findall(".//item"))[:20]:
-                t = item.findtext("title","")
-                d = re.sub(r'<[^>]+>','',(item.findtext("description","")or"")).strip()[:200]
-                pd = item.findtext("pubDate","")
-                lk = item.findtext("link","")
-                # Bloomberg RSS sometimes has dc:date fallback
-                if not pd:
-                    pd = item.findtext("{http://purl.org/dc/elements/1.1/}date","")
-                section = "economics"
-                for kw in ["ai","artificial","machine learning","openai","anthropic","llm","gpt","gemini","agent","robot","autonomous","chip","semiconductor"]:
-                    if kw in (t or "").lower():
-                        section = "technology"
-                        break
-                results.append({"source":name,"tier":1,"section":section,
-                    "title":t,"desc":d,"url":lk,"published":pd[:31] if pd else ""})
-        except:
-            pass
-    return results[:20]
+    def json(self, url):
+        return self.read(url, json.loads)
 
-# ── Source: CNBC Tech RSS ──
-def fetch_cnbc_rss():
-    results = []
-    try:
-        url = "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=19854910"
-        req = urllib.request.Request(url, headers={"User-Agent":"NewsAgent/1.0"})
-        with urllib.request.urlopen(req, timeout=8) as r:
-            data = r.read().decode()
-        import xml.etree.ElementTree as ET
-        for item in list(ET.fromstring(data).findall(".//item"))[:20]:
-            t = item.findtext("title","")
-            d = re.sub(r'<[^>]+>','',(item.findtext("description","")or"")).strip()[:200]
-            pd = item.findtext("pubDate","")
-            lk = item.findtext("link","")
-            results.append({"source":"CNBC","tier":2,"section":"economics",
-                "title":t,"desc":d,"url":lk,"published":pd[:31] if pd else ""})
-    except:
-        pass
-    return results[:15]
+    def xml(self, url):
+        return self.read(url, ET.fromstring)
 
 
-# ── Generic RSS fetcher (tech press + world/geopolitics desks, all keyless) ──
-GENERIC_FEEDS = [
-    # (source name, tier, default section, feed url)
-    ("TechCrunch",            2, "technology",  "https://techcrunch.com/feed/"),
-    ("The Verge",             2, "technology",  "https://www.theverge.com/rss/index.xml"),
-    ("Ars Technica",          2, "technology",  "https://feeds.arstechnica.com/arstechnica/index"),
-    ("Wired",                 2, "technology",  "https://www.wired.com/feed/rss"),
-    ("MIT Technology Review", 2, "technology",  "https://www.technologyreview.com/feed/"),
-    ("The Guardian",          1, "geopolitics", "https://www.theguardian.com/world/rss"),
-    ("Al Jazeera",            2, "geopolitics", "https://www.aljazeera.com/xml/rss/all.xml"),
-    ("New York Times",        1, "geopolitics", "https://rss.nytimes.com/services/xml/rss/nyt/World.xml"),
-    ("NPR",                   2, "general",     "https://feeds.npr.org/1001/rss.xml"),
+@dataclass(frozen=True)
+class Source:
+    name: str
+    publisher: str
+    tier: int
+    section: str
+    url: str
+    kind: str = "rss"
+
+
+# Each feed is its own task: a full first feed cannot truncate later feeds.
+SOURCES = [
+    Source("TechCrunch", "TechCrunch", 2, "technology", "https://techcrunch.com/feed/"),
+    Source("The Verge", "The Verge", 2, "technology", "https://www.theverge.com/rss/index.xml"),
+    Source("Ars Technica", "Ars Technica", 2, "technology", "https://feeds.arstechnica.com/arstechnica/index"),
+    Source("Wired", "Wired", 2, "technology", "https://www.wired.com/feed/rss"),
+    Source("MIT Technology Review", "MIT Technology Review", 2, "technology", "https://www.technologyreview.com/feed/"),
+    Source("The Guardian", "The Guardian", 1, "geopolitics", "https://www.theguardian.com/world/rss"),
+    Source("Al Jazeera", "Al Jazeera", 2, "geopolitics", "https://www.aljazeera.com/xml/rss/all.xml"),
+    Source("New York Times", "New York Times", 1, "geopolitics", "https://rss.nytimes.com/services/xml/rss/nyt/World.xml"),
+    Source("NPR", "NPR", 2, "general", "https://feeds.npr.org/1001/rss.xml"),
+    Source("BBC News", "BBC", 1, "general", "https://feeds.bbci.co.uk/news/rss.xml"),
+    Source("BBC Technology", "BBC", 1, "technology", "https://feeds.bbci.co.uk/news/technology/rss.xml"),
+    Source("Bloomberg Markets", "Bloomberg", 1, "economics", "https://feeds.bloomberg.com/markets/news.rss"),
+    Source("Bloomberg Technology", "Bloomberg", 1, "technology", "https://feeds.bloomberg.com/technology/news.rss"),
+    Source("CNBC", "CNBC", 2, "economics", "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=19854910"),
+    Source("The Economist Weekly", "The Economist", 1, "economist_daily", "https://feeds.economist.com/v1/rss/weekly/58f882cb-21c4-4f19-aa4e-fc3b425d2e9d"),
+    Source("The Intelligence", "The Economist", 1, "economist_daily", "https://feeds.economist.com/v1/rss/the-intelligence/b41cc30e-db0c-4a90-a773-02a6817ca53a"),
+    Source("The World in Brief", "The Economist", 1, "economist_daily", "https://feeds.economist.com/v1/rss/the-world-in-brief/558c580d-7a74-40b4-8c9e-e55a79022c4b"),
+    Source("HackerNews", "HackerNews", 3, "community", "https://hacker-news.firebaseio.com/v0/topstories.json", "hn"),
+    Source("Reddit r/artificial", "Reddit", 3, "community", "https://www.reddit.com/r/artificial/hot.json?limit=12", "reddit"),
+    Source("Reddit r/MachineLearning", "Reddit", 3, "community", "https://www.reddit.com/r/MachineLearning/hot.json?limit=12", "reddit"),
+    Source("arXiv", "arXiv", 3, "research", "https://export.arxiv.org/api/query?search_query=cat:cs.AI+OR+cat:cs.LG&sortBy=submittedDate&sortOrder=descending&max_results=10", "arxiv"),
 ]
 
-# shopping/deals content (Wired runs coupon posts in its main feed) — never news
-_JUNK_RE = re.compile(r'(?i)promo code|coupon|% off|\bdeals?\b|black friday|prime day|gift guide')
 
-def fetch_generic_rss():
+def article(source, title, desc, url, published, **extra):
+    dt = parse_date(published)
+    item = dict(source=source.name, publisher=source.publisher, tier=source.tier, section=source.section,
+                title=html.unescape(" ".join((title or "").split())),
+                desc=html.unescape(re.sub(r"<[^>]+>", "", desc or ""))[:500],
+                url=canonical_url(url), published=dt.isoformat() if dt else None, **extra)
+    if source.section == "general":
+        item["section"] = guess_section(item)
+    return item
+
+
+def fetch_feed(source, reader):
+    root = reader.xml(source.url)
+    items = root.findall(".//item") or root.findall(f"{ATOM}entry")
+    if not items and root.tag not in ("rss", f"{ATOM}feed", "{http://www.w3.org/1999/02/22-rdf-syntax-ns#}RDF"):
+        raise ValueError("not an RSS/Atom feed")
     results = []
-    import xml.etree.ElementTree as ET
-    ATOM = "{http://www.w3.org/2005/Atom}"
-    for name, tier, section, url in GENERIC_FEEDS:
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "NewsAgent/1.0"})
-            with urllib.request.urlopen(req, timeout=8) as r:
-                data = r.read().decode(errors="replace")
-            root = ET.fromstring(data)
-            items = root.findall(".//item") or root.findall(f".//{ATOM}entry")
-            for item in items[:12]:
-                t = item.findtext("title") or item.findtext(f"{ATOM}title") or ""
-                if _JUNK_RE.search(t):
-                    continue
-                d = item.findtext("description") or item.findtext(f"{ATOM}summary") or ""
-                d = re.sub(r'<[^>]+>', '', d).strip()[:200]
-                pd = (item.findtext("pubDate") or item.findtext(f"{ATOM}published")
-                      or item.findtext(f"{ATOM}updated") or "")
-                lk = item.findtext("link") or ""
-                if not lk:  # Atom: link is an attribute
-                    link_el = item.find(f"{ATOM}link")
-                    lk = link_el.get("href", "") if link_el is not None else ""
-                # general-desk feeds (NPR) get keyword-routed; themed desks keep their section
-                sec = section
-                if section == "general":
-                    sec = guess_section({"source": name, "title": t, "desc": d})
-                results.append({"source": name, "tier": tier, "section": sec,
-                    "title": t, "desc": d, "url": lk, "published": pd[:31] if pd else ""})
-        except Exception:
-            pass
+    for item in items[:30]:
+        title = item.findtext("title") or item.findtext(f"{ATOM}title") or ""
+        if JUNK_RE.search(title):
+            continue
+        url = item.findtext("link") or ""
+        if not url:
+            links = item.findall(f"{ATOM}link")
+            url = next((el.get("href", "") for el in links if el.get("rel", "alternate") == "alternate"), "")
+        desc = (item.findtext("description") or item.findtext(f"{ATOM}summary")
+                or item.findtext("{http://www.itunes.com/dtds/podcast-1.0.dtd}summary") or "")
+        published = (item.findtext("pubDate") or item.findtext(f"{ATOM}published")
+                     or item.findtext(f"{ATOM}updated") or item.findtext("{http://purl.org/dc/elements/1.1/}date"))
+        results.append(article(source, title, desc, url, published))
     return results
 
 
-def compute_score(article, all_articles):
-    score = cred_score(article.get("tier",0))
-    title_words = set((article.get("title")or"").lower().split())-{"the","a","an","is","are","was","were","to","of","in","for","on","and","or","with"}
-    matches = sum(1 for other in all_articles if other is not article and other.get("url")!=article.get("url")
-        and len(title_words & set((other.get("title")or"").lower().split()))>=3)
-    score += 30 if matches >= 2 else 15 if matches >= 1 else 0
-    score += mkt_impact((article.get("title")or"")+" "+(article.get("desc")or""))
-    s = article.get("_score",0)
-    if s > 500: score += 10
-    elif s > 200: score += 5
-    return min(score, 100)
+def fetch_hn(source, reader):
+    ids = reader.json(source.url)
+    if not isinstance(ids, list):
+        raise ValueError("expected story IDs")
+    results = []
+    for sid in ids[:25]:
+        if time.monotonic() >= reader.deadline:
+            reader.errors.append("source deadline exceeded")
+            break
+        try:
+            item = reader.json(f"https://hacker-news.firebaseio.com/v0/item/{sid}.json")
+            if not isinstance(item, dict) or item.get("type") != "story" or not item.get("title"):
+                continue
+            published = datetime.fromtimestamp(item.get("time", 0), timezone.utc).isoformat()
+            results.append(article(source, item["title"],
+                f"Score:{item.get('score', 0)}|Comments:{item.get('descendants', 0)}",
+                item.get("url") or f"https://news.ycombinator.com/item?id={sid}", published,
+                community_score=item.get("score", 0)))
+        except Exception as exc:
+            # Network/parse errors are recorded by Reader; malformed items are recorded here.
+            if not reader.errors or reader.errors[-1] != error_label(exc):
+                reader.errors.append(error_label(exc))
+    return results
 
-def fmt_score(s):
-    f = s // 10
-    return f"{'█'*f}{'░'*(10-f)} {s}/100"
 
-# ── MAIN ──
-all_a = []
-if NEWSAPI_KEY:
-    all_a.extend(fetch_newsapi())    # supplemental, needs key
-all_a.extend(fetch_generic_rss())    # tech press + world desks, keyless
-all_a.extend(fetch_bbc_rss())        # fresh, tier-1
-all_a.extend(fetch_bloomberg_rss())  # fresh, tier-1
-all_a.extend(fetch_cnbc_rss())       # fresh, tier-2
-all_a.extend(fetch_hackernews())     # fresh community
-all_a.extend(fetch_reddit())         # community
-all_a.extend(fetch_arxiv())          # research
-all_a.extend(fetch_economist_rss())  # editorial signal
+def fetch_reddit(source, reader):
+    payload = reader.json(source.url)
+    children = payload.get("data", {}).get("children")
+    if not isinstance(children, list):
+        raise ValueError("expected Reddit listing")
+    results = []
+    for post in children:
+        item = post.get("data", {})
+        if item.get("stickied"):
+            continue
+        results.append(article(source, item.get("title"), f"Score:{item.get('score', 0)}|Comments:{item.get('num_comments', 0)}",
+            f"https://www.reddit.com{item.get('permalink', '')}",
+            datetime.fromtimestamp(item.get("created_utc", 0), timezone.utc).isoformat(),
+            community_score=item.get("score", 0)))
+    return results
 
-# ── Freshness filter ──
-fresh_all = []
-seen_urls = load_seen_urls()
-for a in all_a:
-    sec = a.get("section", "")
-    url = a.get("url", "")
-    # NewsAPI / arXiv: >48h stale
-    if sec not in ("community", "economist_daily", "economist_all", "research") and not is_fresh(a, 48):
-        continue
-    # Economist RSS: >72h stale (podcast feeds have back-catalog)
-    if sec in ("economist_daily", "economist_all") and not is_fresh(a, 72):
-        continue
-    # arXiv papers: >72h stale (papers persist for days)
-    if sec == "research" and not is_fresh(a, 72):
-        continue
-    # Skip already-seen URLs
-    if url and url in seen_urls:
-        continue
-    fresh_all.append(a)
 
-all_a = fresh_all
+def fetch_arxiv(source, reader):
+    root = reader.xml(source.url)
+    if root.tag != f"{ATOM}feed":
+        raise ValueError("expected arXiv Atom feed")
+    return [article(source, item.findtext(f"{ATOM}title"), item.findtext(f"{ATOM}summary"),
+                    item.findtext(f"{ATOM}id"), item.findtext(f"{ATOM}published"),
+                    authors=", ".join(a.findtext(f"{ATOM}name", "") for a in item.findall(f"{ATOM}author")[:3]))
+            for item in root.findall(f"{ATOM}entry")]
 
-# ── Sort economist items by date descending ──
-econ_items = [a for a in all_a if a.get("section") == "economist_daily"]
-for a in econ_items:
-    dt = parse_date_rfc2822(a.get("published", ""))
-    a["_sort_dt"] = dt or datetime.min.replace(tzinfo=timezone.utc)
 
-if econ_items:
-    econ_items.sort(key=lambda x: x["_sort_dt"], reverse=True)
-    econ_urls = {a["url"] for a in econ_items}
-    non_econ = [a for a in all_a if a.get("section") != "economist_daily" or a.get("url") not in econ_urls]
-    all_a = non_econ + econ_items
+def fetch_newsapi(source, reader):
+    # Supplemental only; preserve the underlying publisher for corroboration.
+    results = []
+    requests = [("top-headlines", dict(category=category, pageSize=20))
+                for category in ("technology", "business", "general")]
+    queries = ["AI", "semiconductor", "OpenAI", "NVIDIA", "AI regulation", "China tech",
+               "machine learning", "sanctions", "defense", "election", "foreign policy",
+               "Iran", "Ukraine", "China", "Middle East", "tariff", "trade war", "IPO", "Federal Reserve"]
+    requests += [("everything", dict(q=query, pageSize=3, sortBy="publishedAt")) for query in queries]
+    for endpoint, params in requests:
+        if time.monotonic() >= reader.deadline:
+            reader.errors.append("source deadline exceeded")
+            break
+        try:
+            params = urllib.parse.urlencode(dict(params, language="en", apiKey=source.url))
+            payload = reader.json(f"https://newsapi.org/v2/{endpoint}?" + params)
+            if payload.get("status") != "ok":
+                raise ValueError("NewsAPI rejected request")
+            for item in payload.get("articles", []):
+                name = (item.get("source") or {}).get("name") or "Unknown"
+                publisher = next((s for s in SOURCES if s.name == name or s.publisher == name), None)
+                if publisher is None and name in ("Reuters", "AP News", "Financial Times", "Nature"):
+                    publisher = Source(name, name, 2 if name == "Nature" else 1, "general", "")
+                if publisher is None:
+                    continue
+                results.append(article(publisher, item.get("title"), item.get("description"),
+                                       item.get("url"), item.get("publishedAt")))
+        except Exception as exc:
+            if not reader.errors or reader.errors[-1] != error_label(exc):
+                reader.errors.append(error_label(exc))
+    return results
 
-# ── Save seen URLs for next run ──
-new_urls = set()
-for a in all_a:
-    url = a.get("url", "")
-    sec = a.get("section", "")
-    if sec in ("economist_daily", "economist_all") and is_fresh(a, 72):
-        new_urls.add(url)
-    elif is_fresh(a, 48):
-        new_urls.add(url)
-save_seen_urls(new_urls | seen_urls)
 
-# ── Compute signal scores and sort ──
-for a in all_a:
-    a["signal_score"] = compute_score(a, all_a)
+FETCHERS = {"rss": fetch_feed, "hn": fetch_hn, "reddit": fetch_reddit, "arxiv": fetch_arxiv, "newsapi": fetch_newsapi}
 
-all_a.sort(key=lambda x:x.get("signal_score",0), reverse=True)
 
-secs = {}
-for a in all_a:
-    s = a.get("section","general")
-    secs.setdefault(s,[]).append(a)
+def run_source(source):
+    started = time.monotonic()
+    reader = Reader()
+    try:
+        items = FETCHERS[source.kind](source, reader)
+        items = [a for a in items if a["url"] and a["title"]]
+    except Exception as exc:
+        if not reader.errors or reader.errors[-1] != error_label(exc):
+            reader.errors.append(error_label(exc))
+        items = []
+    status = ("partial" if items else "error") if reader.errors else ("ok" if items else "empty")
+    return {
+        "name": source.name, "status": status, "article_count": len(items),
+        "elapsed_ms": round((time.monotonic() - started) * 1000),
+        "errors": reader.errors, "articles": items,
+    }
 
-now = datetime.now(timezone.utc)
-print(f"=== Daily Briefing Data ===")
-print(f"Generated: {now.strftime('%Y-%m-%d %H:%M UTC')}")
-print(f"Total articles: {len(all_a)}")
-print()
 
-for sec_name, sec_label in [("technology","AI & Tech"),("geopolitics","Geopolitics"),
-                              ("economics","Economics & Markets"),("community","Community"),
-                              ("research","Research"),("general","Other"),("economist_daily","Economist Daily")]:
-    items = secs.get(sec_name, [])[:6]
-    if not items: continue
-    print(f"==SECTION:{sec_name}==")
-    for a in items:
-        tag = a.get("tag","")
-        prefix = {"weekly":"[WEEKLY]","intel":"[INTEL]","brief":"[BRIEF]"}.get(tag,"")
-        title_str = f"{prefix} {a['title']}" if prefix else a['title']
-        print(f"[{a['signal_score']}] {title_str}")
-        print(f"  Source:{a['source']}|{a.get('published','')}|Signal:{fmt_score(a['signal_score'])}")
-        print(f"  URL:{a['url']}")
-        if a.get('desc'):
-            d = a['desc'][:150]
-            print(f"  >{d}")
-        print()
+def title_words(article):
+    return set(re.findall(r"\b\w+\b", article["title"].lower())) - STOP_WORDS
 
-# Also print Economist-only list at end for clarity
-econ_items = [a for a in all_a if a.get("tag") in ("weekly","intel","brief")]
-if econ_items:
-    print("==SECTION:economist_all==")
-    for a in econ_items[:8]:
-        t = a.get("tag","")
-        print(f"[{t.upper()}] {a['title']}|{a.get('published','')}")
-        if a.get('desc'):
-            print(f"  >{a['desc'][:150]}")
-        print()
+
+def compute_score(item, articles):
+    words = title_words(item)
+    publishers = set()
+    for other in articles:
+        if other["publisher"] == item["publisher"] or other["url"] == item["url"]:
+            continue
+        other_words = title_words(other)
+        overlap = words & other_words
+        if len(overlap) >= 3 and len(overlap) / max(1, len(words | other_words)) >= 0.5:
+            publishers.add(other["publisher"])
+    credibility = {1: 40, 2: 25, 3: 10}.get(item.get("tier"), 0)
+    impact = min(20, 10 * sum(has_keyword(item["title"] + " " + item["desc"], kw) for kw in MARKET_KEYWORDS))
+    # Community popularity is retained as a separate signal, not factual credibility.
+    return min(100, credibility + min(30, 15 * len(publishers)) + impact)
+
+
+def prepare_articles(results, now):
+    unique = {}
+    for result in results:
+        for item in result["articles"]:
+            hours = 72 if item["section"] in ("research", "economist_daily") else 48
+            if not is_fresh(item, hours, now):
+                continue
+            # Prefer the original publisher over a community repost of the same URL.
+            previous = unique.get(item["url"])
+            if previous is None or item["tier"] < previous["tier"]:
+                unique[item["url"]] = item
+    articles = list(unique.values())
+    for item in articles:
+        item["signal_score"] = compute_score(item, articles)
+    return sorted(articles, key=lambda a: (a["signal_score"], a["published"] or "", a["url"]), reverse=True)
+
+
+def collect(sources=None, workers=6, directory=None):
+    sources = SOURCES if sources is None else sources
+    with ThreadPoolExecutor(max_workers=max(1, min(workers, 8))) as executor:
+        results = list(executor.map(run_source, sources))
+    now = datetime.now(timezone.utc)
+    articles = prepare_articles(results, now)
+    successful = sum(r["status"] in ("ok", "empty", "partial") for r in results)
+    health = [{k: v for k, v in r.items() if k != "articles"} for r in results]
+    report = {
+        "schema_version": 1, "generated_at": now.isoformat(),
+        "status": "error" if not successful else "degraded" if any(r["status"] in ("error", "partial") for r in results) else "ok",
+        "sources": health, "fetched_count": len(articles), "articles": [],
+    }
+    if not successful:
+        return report
+    with NewsState(directory) as state:
+        state.prune()
+        rendered = state.rendered_urls()
+        candidates = [a for a in articles if a["url"] not in rendered]
+        selected, counts = [], {}
+        for item in candidates:
+            section = item["section"]
+            if counts.get(section, 0) < 6:
+                selected.append(item)
+                counts[section] = counts.get(section, 0) + 1
+        report["run_id"] = state.record_fetch(articles, selected, report["generated_at"])
+    report.update(articles=selected, selected_count=len(selected), unreported_count=len(candidates))
+    return report
+
+
+def format_digest(report):
+    lines = [
+        "=== Daily Briefing Data ===", f"Generated: {report['generated_at']}",
+        f"Status: {report['status']}", f"Run ID: {report.get('run_id', 'none')}",
+        f"Fetched: {report['fetched_count']} | Selected: {len(report['articles'])}",
+        "Copy run_id into the brief JSON; article_urls must list ONLY cached articles actually used.",
+        "", "== SOURCE HEALTH ==",
+    ]
+    for source in report["sources"]:
+        lines.append(f"{source['name']}: {source['status']} | {source['article_count']} articles | {source['elapsed_ms']} ms"
+                     + (" | " + "; ".join(source["errors"]) if source["errors"] else ""))
+    if not report["articles"]:
+        lines += ["", "No new eligible articles. Do not invent stories to fill sections."]
+    for section in dict.fromkeys(a["section"] for a in report["articles"]):
+        lines += ["", f"==SECTION:{section}=="]
+        for item in (a for a in report["articles"] if a["section"] == section):
+            lines += [f"[{item['signal_score']}] {item['title']}",
+                      f"  Source:{item['source']}|{item['published'] or 'publication time unknown'}",
+                      f"  URL:{item['url']}", f"  >{item['desc']}", ""]
+    return "\n".join(lines) + "\n"
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--json", action="store_true", help="Emit a machine-readable fetch report")
+    args = parser.parse_args()
+    sources = list(SOURCES)
+    key = load_key()
+    if key:
+        sources.append(Source("NewsAPI", "NewsAPI", 0, "general", key, "newsapi"))
+    report = collect(sources)
+    print(json.dumps(report, ensure_ascii=False) if args.json else format_digest(report))
+    return 2 if report["status"] == "error" else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+

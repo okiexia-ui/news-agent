@@ -12,7 +12,10 @@ Usage:
     python3 render_and_send.py <data.json> <morning|evening> [--no-email]
 """
 
+import argparse
+import math
 import os, sys, smtplib, tempfile
+from contextlib import nullcontext
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
@@ -21,6 +24,11 @@ from pathlib import Path
 from datetime import datetime, timezone
 from html import escape
 import json
+
+if __package__:
+    from .news_state import NewsState, canonical_url
+else:
+    from news_state import NewsState, canonical_url
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parent
@@ -88,6 +96,10 @@ def _pct(value):
 
 def render_html(data: dict, time_label: str) -> str:
     """Fill the NEWS AGENT HTML template with data."""
+    if not isinstance(data, dict):
+        raise ValueError("brief JSON must be an object")
+    if data.get("quote") is not None and not isinstance(data["quote"], dict):
+        raise ValueError("quote must be an object or null")
     html = TEMPLATE_PATH.read_text()
 
     # Big picture
@@ -99,7 +111,9 @@ def render_html(data: dict, time_label: str) -> str:
     html = html.replace("__BIG_PICTURE__", bp_html or _empty("今日无突出信号"))
 
     # Quote (evening uses the "一日总结" summary style: card background, no author line)
-    q = data.get("quote", {})
+    q = data.get("quote") or {}
+    if not q.get("text"):
+        html = html.replace('<div class="qbar">', '<div class="qbar" hidden>')
     if time_label == "evening" or q.get("author") == "一日总结":
         html = html.replace('<div class="qbar">', '<div class="qbar qbar-eve">')
         html = html.replace('<span class="qa">—— __QUOTE_AUTHOR__</span>', '')
@@ -184,7 +198,9 @@ def render_html(data: dict, time_label: str) -> str:
             cls = "prb-m"
         else:
             cls = "prb-l"
-        prob_rows += f'<div class="prob-row"><span class="pr-name"><strong>{_text(item.get("event",""))}</strong></span><div class="pr-bar-wrap"><div class="pr-track"><div class="pr-bar {cls}" style="width:{pct}%"></div></div><span class="pr-pct">{pct}%</span></div></div>'
+        basis = item.get("basis") or "未提供依据"
+        horizon = item.get("horizon") or "未提供期限"
+        prob_rows += f'<div class="prob-entry"><div class="prob-row"><span class="pr-name"><strong>{_text(item.get("event",""))}</strong></span><div class="pr-bar-wrap"><div class="pr-track"><div class="pr-bar {cls}" style="width:{pct}%"></div></div><span class="pr-pct">{pct}%</span></div></div><div class="prob-basis">主观估计 · {_text(horizon)} · {_text(basis)}</div></div>'
     prob_html = '<div class="prob-hdr">概率评估</div>' + (prob_rows or _empty("今日无概率评估"))
 
     # Scenarios
@@ -235,15 +251,41 @@ def render_html(data: dict, time_label: str) -> str:
     html = html.replace("__WATCH_LIST__", wl_html or _empty("今日无重点观察"))
 
     # Hashtags
-    ht_html = "\n".join([f'<span class="ht">{_text(h)}</span>' for h in data.get("hashtags", [])])
+    hashtags = data.get("hashtags") or []
+    if not isinstance(hashtags, list):
+        raise ValueError("hashtags must be an array or null")
+    ht_html = "\n".join([f'<span class="ht">{_text(h)}</span>' for h in hashtags])
     html = html.replace("__HASHTAGS__", ht_html)
 
     # Market dash
     md_html = '<div class="mkt-hdr">📊 市场仪表盘</div><div class="mkt-g">'
     change_map = {"up": "m-up", "down": "m-down", "flat": "", "warn": "m-warn"}
     for item in _safe_items(data.get("market_data", [])):
-        cc = change_map.get(item.get("change", ""), "")
-        md_html += f'<div class="mkt-item"><span class="mn">{_text(item.get("name",""))}</span><span class="mv {cc}">{_text(item.get("value",""))}</span></div>'
+        value = item.get("value")
+        valid_value = isinstance(value, (str, int, float)) and not isinstance(value, bool)
+        if isinstance(value, str):
+            valid_value = bool(value.strip())
+        elif isinstance(value, (int, float)):
+            valid_value = valid_value and math.isfinite(value)
+        url = canonical_url(item.get("source_url"))
+        unit = item.get("unit")
+        try:
+            as_of = datetime.fromisoformat(item.get("as_of", "").replace("Z", "+00:00"))
+            if as_of.tzinfo is None:
+                raise ValueError("market time must include an offset")
+            stamp = as_of.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        except (ValueError, TypeError, AttributeError):
+            stamp = ""
+        supported = valid_value and url and stamp and isinstance(unit, str) and unit.strip()
+        if supported:
+            cc = change_map.get(item.get("change", ""), "")
+            display_value = f"{value} {unit}"
+            meta = f'<a href="{_text(url)}">来源</a> · {_text(stamp)}'
+        else:
+            cc, display_value = "m-warn", "暂无数据"
+            meta = "缺少有效数值、来源、数据时间或单位"
+            print(f"WARNING: market_data[{item.get('name', '')!r}] has no complete provenance; value omitted", file=sys.stderr)
+        md_html += f'<div class="mkt-item"><div class="mkt-value"><span class="mn">{_text(item.get("name",""))}</span><span class="mv {cc}">{_text(display_value)}</span></div><div class="mkt-meta">{meta}</div></div>'
     md_html += '</div>'
     html = html.replace("__MARKET_DASH__", md_html)
 
@@ -254,6 +296,8 @@ def render_html(data: dict, time_label: str) -> str:
     elif not isinstance(et, str):
         et = str(et)
     html = html.replace("__EDITOR_TAKE__", _text(et))
+    if not et.strip():
+        html = html.replace('<div class="et">', '<div class="et" hidden>')
 
     # Date / Vol / Source
     today = datetime.now()
@@ -266,8 +310,14 @@ def render_html(data: dict, time_label: str) -> str:
     html = html.replace("__VOL__", f"VOL.{today.strftime('%m%d')}")
     brief_type = "早报" if time_label == "morning" else "晚报"
     html = html.replace("NEWS AGENT", f"NEWS AGENT · {brief_type}")
-    collected_at = datetime.now(timezone.utc)
-    html = html.replace("__DATA_SOURCE__", f"数据采集 · {collected_at.strftime('%Y-%m-%d %H:%M UTC')}")
+    if data.get("collected_at"):
+        collected_at = datetime.fromisoformat(data["collected_at"].replace("Z", "+00:00"))
+        if collected_at.tzinfo is None:
+            raise ValueError("collected_at must include a timezone")
+        footer = "数据采集 · " + collected_at.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+    else:
+        footer = "生成时间 · " + datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+    html = html.replace("__DATA_SOURCE__", footer)
 
     return html
 
@@ -332,47 +382,58 @@ def send_email(pdf_path: str, time_label: str):
         )
         msg.attach(pdf_attachment)
 
-    server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+    server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=30)
     try:
         server.ehlo()
         server.starttls()
         server.ehlo()
         server.login(FROM_EMAIL, app_password)
-        server.sendmail(FROM_EMAIL, TO_EMAILS, msg.as_string())
+        refused = server.sendmail(FROM_EMAIL, TO_EMAILS, msg.as_string())
+        if refused:
+            raise RuntimeError("Some recipients were refused; this run was not marked fully sent")
     finally:
         server.quit()
     print(f"Email sent with PDF: {subject} -> {TO_EMAILS}")
 
 
-def main():
-    if len(sys.argv) < 2:
-        print(__doc__)
-        sys.exit(1)
-
-    data_path = Path(sys.argv[1])
-    time_label = sys.argv[2] if len(sys.argv) >= 3 and sys.argv[2] in ("morning", "evening") else "morning"
-    no_email = "--no-email" in sys.argv
-
-    if not data_path.exists():
-        print(f"ERROR: data file not found: {data_path}", file=sys.stderr)
-        sys.exit(1)
-
-    data = json.loads(data_path.read_text())
-
-    print("Rendering HTML...")
-    html = render_html(data, time_label)
-
-    print("Generating PDF...")
-    pdf_path = f"/tmp/news_agent_{time_label}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-    html_to_pdf(html, pdf_path)
-
-    if no_email:
-        print(f"Skipping email (--no-email). PDF at: {pdf_path}")
-        return
-
-    print("Sending email...")
-    send_email(pdf_path, time_label)
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("data_path", type=Path)
+    parser.add_argument("time_label", nargs="?", choices=("morning", "evening"), default="morning")
+    parser.add_argument("--no-email", action="store_true")
+    parser.add_argument("--output", type=Path, help="PDF destination (default: a unique temporary filename)")
+    args = parser.parse_args(argv)
+    try:
+        data = json.loads(args.data_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("brief JSON must be an object")
+        tracked = "run_id" in data or "article_urls" in data
+        with NewsState() if tracked else nullcontext(None) as state:
+            if state:
+                _, collected_at = state.validate_selection(data.get("run_id"), data.get("article_urls"))
+                data["collected_at"] = collected_at
+            else:
+                print("Manual brief: no run_id/article_urls; deduplication state will not change.")
+            print("Rendering HTML...")
+            html = render_html(data, args.time_label)
+            pdf_path = args.output or Path(tempfile.gettempdir()) / f"news_agent_{args.time_label}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.pdf"
+            print("Generating PDF...")
+            html_to_pdf(html, str(pdf_path))
+            if state:
+                state.mark_rendered(data["run_id"], data["article_urls"], pdf_path)
+            if args.no_email:
+                print(f"Skipping email (--no-email). PDF at: {pdf_path}")
+                return 0
+            print("Sending email...")
+            send_email(str(pdf_path), args.time_label)
+            if state:
+                state.mark_sent(data["run_id"])
+        return 0
+    except (ValueError, OSError, RuntimeError, smtplib.SMTPException) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
+
