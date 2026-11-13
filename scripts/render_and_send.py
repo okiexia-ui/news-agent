@@ -12,14 +12,23 @@ Usage:
     python3 render_and_send.py <data.json> <morning|evening> [--no-email]
 """
 
+import argparse
+import math
 import os, sys, smtplib, tempfile
+from contextlib import nullcontext
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
+from html import escape
 import json
+
+if __package__:
+    from .news_state import NewsState, canonical_url
+else:
+    from news_state import NewsState, canonical_url
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parent
@@ -63,8 +72,34 @@ def _safe_items(items) -> list:
     return good
 
 
+def _text(value) -> str:
+    return escape(str(value))
+
+
+def _empty(message: str) -> str:
+    """Fallback shown when a section has no items, so the heading isn't left dangling."""
+    return f'<div class="empty-note">（{message}）</div>'
+
+
+def _pct(value):
+    """Coerce an LLM-supplied probability (65, 65.0, "65", "65%") to an int in 0-100, or None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        value = value.strip().rstrip("%").strip()
+    try:
+        pct = round(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return max(0, min(100, pct))
+
+
 def render_html(data: dict, time_label: str) -> str:
     """Fill the NEWS AGENT HTML template with data."""
+    if not isinstance(data, dict):
+        raise ValueError("brief JSON must be an object")
+    if data.get("quote") is not None and not isinstance(data["quote"], dict):
+        raise ValueError("quote must be an object or null")
     html = TEMPLATE_PATH.read_text()
 
     # Big picture
@@ -72,24 +107,26 @@ def render_html(data: dict, time_label: str) -> str:
     for i, item in enumerate(_safe_items(data.get("big_picture", []))):
         tag_map = {"技术突破": "bp-t1", "资本动向": "bp-t2", "基础设施": "bp-t3", "地缘风险": "bp-t4"}
         cls = tag_map.get(item.get("tag", ""), "bp-t1")
-        bp_html += f'<div class="bp-card"><div class="bp-n">{i+1:02d}</div><div class="bp-b"><div class="bp-tag {cls}">{item.get("tag","")}</div><div class="bp-title">{item.get("title","")}</div><div class="bp-desc">{item.get("desc","")}</div></div></div>'
-    html = html.replace("__BIG_PICTURE__", bp_html)
+        bp_html += f'<div class="bp-card"><div class="bp-n">{i+1:02d}</div><div class="bp-b"><div class="bp-tag {cls}">{_text(item.get("tag",""))}</div><div class="bp-title">{_text(item.get("title",""))}</div><div class="bp-desc">{_text(item.get("desc",""))}</div></div></div>'
+    html = html.replace("__BIG_PICTURE__", bp_html or _empty("今日无突出信号"))
 
     # Quote (evening uses the "一日总结" summary style: card background, no author line)
-    q = data.get("quote", {})
+    q = data.get("quote") or {}
+    if not q.get("text"):
+        html = html.replace('<div class="qbar">', '<div class="qbar" hidden>')
     if time_label == "evening" or q.get("author") == "一日总结":
         html = html.replace('<div class="qbar">', '<div class="qbar qbar-eve">')
         html = html.replace('<span class="qa">—— __QUOTE_AUTHOR__</span>', '')
-        html = html.replace("__QUOTE__", f'📋 {q.get("text", "")}')
+        html = html.replace("__QUOTE__", f'📋 {_text(q.get("text", ""))}')
     else:
-        html = html.replace("__QUOTE__", q.get("text", ""))
-    html = html.replace("__QUOTE_AUTHOR__", q.get("author", ""))
+        html = html.replace("__QUOTE__", _text(q.get("text", "")))
+    html = html.replace("__QUOTE_AUTHOR__", _text(q.get("author", "")))
 
     # Cross-signal
     cs_html = ""
     for item in _safe_items(data.get("cross_signal", [])):
-        cs_html += f'<div class="cross-item"><div class="ci-title">{item.get("title","")}</div><div class="ci-body">{item.get("body","")}</div></div>'
-    html = html.replace("__CROSS_SIGNAL__", cs_html)
+        cs_html += f'<div class="cross-item"><div class="ci-title">{_text(item.get("title",""))}</div><div class="ci-body">{_text(item.get("body",""))}</div></div>'
+    html = html.replace("__CROSS_SIGNAL__", cs_html or _empty("今日无突出跨板块信号"))
 
     # News cards
     news_html = ""
@@ -104,30 +141,30 @@ def render_html(data: dict, time_label: str) -> str:
         ic = impact_map.get(item.get("impact", ""), "imp-m")
         cc = cred_map.get(item.get("credibility", ""), "cred-m")
         news_html += f'''<div class="nc">
-<div class="nc-top"><span class="nc-tag {tc}">{item.get("category","")}</span><div class="badge-group"><span class="imp-badge {ic}">{item.get("impact","")}</span><span class="cred-badge {cc}">📡 {item.get("credibility","")}</span></div></div>
-<div class="nc-title">{item.get("title","")}</div>
-<div class="nc-meta">{item.get("source","")} · {item.get("signal","")}</div>
-<div class="nc-l"><span class="nl">📋 事实：</span>{item.get("fact","")}</div>
-<div class="nc-l"><span class="nl">🎯 影响：</span>{item.get("impact_text","")}</div>
-<div class="nc-link">🔗 {item.get("url","")}</div>
+<div class="nc-top"><span class="nc-tag {tc}">{_text(item.get("category",""))}</span><div class="badge-group"><span class="imp-badge {ic}">{_text(item.get("impact",""))}</span><span class="cred-badge {cc}">📡 {_text(item.get("credibility",""))}</span></div></div>
+<div class="nc-title">{_text(item.get("title",""))}</div>
+<div class="nc-meta">{_text(item.get("source",""))} · {_text(item.get("signal",""))}</div>
+<div class="nc-l"><span class="nl">📋 事实：</span>{_text(item.get("fact",""))}</div>
+<div class="nc-l"><span class="nl">🎯 影响：</span>{_text(item.get("impact_text",""))}</div>
+<div class="nc-link">🔗 {_text(item.get("url",""))}</div>
 </div>'''
-    html = html.replace("__NEWS_CARDS__", news_html)
+    html = html.replace("__NEWS_CARDS__", news_html or _empty("今日无突出要闻"))
 
     # Geopolitical
     geo_html = ""
     for item in _safe_items(data.get("geopolitical", [])):
         geo_html += f'''<div class="geo">
 <div class="geo-tag">⚠ 高影响</div>
-<div class="geo-title">{item.get("title","")}</div>
-<div class="geo-src">{item.get("source","")} · {item.get("signal","")}</div>
+<div class="geo-title">{_text(item.get("title",""))}</div>
+<div class="geo-src">{_text(item.get("source",""))} · {_text(item.get("signal",""))}</div>
 <div class="geo-4">
-<div class="geo-4-item"><div class="g4l">发生了什么</div><div class="g4t">{item.get("what","")}</div></div>
-<div class="geo-4-item"><div class="g4l">为什么重要</div><div class="g4t">{item.get("why","")}</div></div>
-<div class="geo-4-item"><div class="g4l">市场影响</div><div class="g4t">{item.get("market","")}</div></div>
-<div class="geo-4-item"><div class="g4l">关注下一步</div><div class="g4t">{item.get("watch","")}</div></div>
+<div class="geo-4-item"><div class="g4l">发生了什么</div><div class="g4t">{_text(item.get("what",""))}</div></div>
+<div class="geo-4-item"><div class="g4l">为什么重要</div><div class="g4t">{_text(item.get("why",""))}</div></div>
+<div class="geo-4-item"><div class="g4l">市场影响</div><div class="g4t">{_text(item.get("market",""))}</div></div>
+<div class="geo-4-item"><div class="g4l">关注下一步</div><div class="g4t">{_text(item.get("watch",""))}</div></div>
 </div>
 </div>'''
-    html = html.replace("__GEOPOLITICAL__", geo_html)
+    html = html.replace("__GEOPOLITICAL__", geo_html or _empty("今日无突出地缘事件"))
 
     # Market news (filtered)
     market_news = [n for n in _safe_items(data.get("news", [])) if isinstance(n, dict) and n.get("category") in ("资本市场", "货币政策", "市场")]
@@ -137,37 +174,44 @@ def render_html(data: dict, time_label: str) -> str:
         ic = impact_map.get(item.get("impact", ""), "imp-m")
         cc = cred_map.get(item.get("credibility", ""), "cred-m")
         mn_html += f'''<div class="nc">
-<div class="nc-top"><span class="nc-tag {tc}">{item.get("category","")}</span><div class="badge-group"><span class="imp-badge {ic}">{item.get("impact","")}</span><span class="cred-badge {cc}">📡 {item.get("credibility","")}</span></div></div>
-<div class="nc-title">{item.get("title","")}</div>
-<div class="nc-meta">{item.get("source","")} · {item.get("signal","")}</div>
-<div class="nc-l"><span class="nl">📋 事实：</span>{item.get("fact","")}</div>
-<div class="nc-l"><span class="nl">🎯 影响：</span>{item.get("impact_text","")}</div>
-<div class="nc-link">🔗 {item.get("url","")}</div>
+<div class="nc-top"><span class="nc-tag {tc}">{_text(item.get("category",""))}</span><div class="badge-group"><span class="imp-badge {ic}">{_text(item.get("impact",""))}</span><span class="cred-badge {cc}">📡 {_text(item.get("credibility",""))}</span></div></div>
+<div class="nc-title">{_text(item.get("title",""))}</div>
+<div class="nc-meta">{_text(item.get("source",""))} · {_text(item.get("signal",""))}</div>
+<div class="nc-l"><span class="nl">📋 事实：</span>{_text(item.get("fact",""))}</div>
+<div class="nc-l"><span class="nl">🎯 影响：</span>{_text(item.get("impact_text",""))}</div>
+<div class="nc-link">🔗 {_text(item.get("url",""))}</div>
 </div>'''
     if not mn_html:
-        mn_html = "<div style='color:#888;font-size:11px;padding:8px;'>（今日无突出市场新闻）</div>"
+        mn_html = _empty("今日无突出市场新闻")
     html = html.replace("__MARKET_NEWS__", mn_html)
 
     # Probabilities
-    prob_html = '<div class="prob-hdr">概率评估</div>'
+    prob_rows = ""
     for item in _safe_items(data.get("probabilities", [])):
-        pct = item.get("pct", 50)
+        pct = _pct(item.get("pct"))
+        if pct is None:
+            print(f"Skipping probability with invalid pct: {item.get('pct')!r} ({str(item.get('event', ''))[:80]})")
+            continue
         if pct >= 55:
             cls = "prb-h"
         elif pct >= 30:
             cls = "prb-m"
         else:
             cls = "prb-l"
-        prob_html += f'<div class="prob-row"><span class="pr-name"><strong>{item.get("event","")}</strong></span><div class="pr-bar-wrap"><div class="pr-bar {cls}" style="width:{pct}px"></div><span class="pr-pct">{pct}%</span></div></div>'
+        basis = item.get("basis") or "未提供依据"
+        horizon = item.get("horizon") or "未提供期限"
+        prob_rows += f'<div class="prob-entry"><div class="prob-row"><span class="pr-name"><strong>{_text(item.get("event",""))}</strong></span><div class="pr-bar-wrap"><div class="pr-track"><div class="pr-bar {cls}" style="width:{pct}%"></div></div><span class="pr-pct">{pct}%</span></div></div><div class="prob-basis">主观估计 · {_text(horizon)} · {_text(basis)}</div></div>'
+    prob_html = '<div class="prob-hdr">概率评估</div>' + (prob_rows or _empty("今日无概率评估"))
 
     # Scenarios
-    scen_html = '<div class="scen-hdr">未来 30 天情景规划</div>'
+    scen_rows = ""
     for item in _safe_items(data.get("scenarios", [])):
         t = item.get("type", "基准")
         si = {"乐观": "si-bull", "基准": "si-base", "悲观": "si-bear"}.get(t, "si-base")
         emoji = {"乐观": "🟢", "基准": "🔵", "悲观": "🔴"}.get(t, "🔵")
-        scen_html += f'<div class="scen-item"><span class="si-tag {si}">{emoji} {t}</span><span class="si-text">{item.get("text","")}</span></div>'
+        scen_rows += f'<div class="scen-item"><span class="si-tag {si}">{emoji} {_text(t)}</span><span class="si-text">{_text(item.get("text",""))}</span></div>'
 
+    scen_html = '<div class="scen-hdr">未来 30 天情景规划</div>' + (scen_rows or _empty("今日无情景规划"))
     html = html.replace("__PROB_SCENARIO__", f'<div class="ps-grid"><div class="prob-box">{prob_html}</div><div class="scen-box">{scen_html}</div></div>')
 
     # Community
@@ -176,14 +220,14 @@ def render_html(data: dict, time_label: str) -> str:
     for item in community:
         tc = tag_map.get(item.get("category", ""), "nct1")
         com_html += f'''<div class="nc">
-<div class="nc-top"><span class="nc-tag {tc}">{item.get("category","")}</span><div class="badge-group"><span class="imp-badge imp-hot">💬 社区热议</span><span class="cred-badge cred-l">📡 低可信</span></div></div>
-<div class="nc-title">{item.get("title","")}</div>
-<div class="nc-meta">{item.get("source","")}</div>
-<div class="nc-l"><span class="nl">💡</span> {item.get("impact_text","")}</div>
-<div class="nc-link">🔗 {item.get("url","")}</div>
+<div class="nc-top"><span class="nc-tag {tc}">{_text(item.get("category",""))}</span><div class="badge-group"><span class="imp-badge imp-hot">💬 社区热议</span><span class="cred-badge cred-l">📡 低可信</span></div></div>
+<div class="nc-title">{_text(item.get("title",""))}</div>
+<div class="nc-meta">{_text(item.get("source",""))}</div>
+<div class="nc-l"><span class="nl">💡</span> {_text(item.get("impact_text",""))}</div>
+<div class="nc-link">🔗 {_text(item.get("url",""))}</div>
 </div>'''
     if not com_html:
-        com_html = "<div style='color:#888;font-size:11px;padding:8px;'>（今日无突出社区讨论）</div>"
+        com_html = _empty("今日无突出社区讨论")
     html = html.replace("__COMMUNITY__", com_html)
 
     # ArXiv papers (evening only)
@@ -192,9 +236,9 @@ def render_html(data: dict, time_label: str) -> str:
         arx_html = '<div class="sh"><span class="sh-label">📄 ArXiv 论文精选</span><span class="sh-line"></span></div>'
         for paper in _safe_items(arxiv_items):
             arx_html += f'''<div class="nc" style="border-left:3px solid #7c3aed">
-<div class="nc-title">{paper.get("title","")}</div>
-<div class="nc-meta" style="color:#7c3aed">👤 {paper.get("authors","")}</div>
-<div class="nc-l" style="font-size:9.5px">{paper.get("summary","")}</div>
+<div class="nc-title">{_text(paper.get("title",""))}</div>
+<div class="nc-meta" style="color:#7c3aed">👤 {_text(paper.get("authors",""))}</div>
+<div class="nc-l" style="font-size:9.5px">{_text(paper.get("summary",""))}</div>
 </div>'''
         html = html.replace('<!-- WATCHLIST -->', arx_html + '<!-- WATCHLIST -->')
 
@@ -203,19 +247,45 @@ def render_html(data: dict, time_label: str) -> str:
     colors = ["wd1", "wd2", "wd3", "wd4"]
     for i, item in enumerate(_safe_items(data.get("watch_list", []))):
         c = colors[i % 4]
-        wl_html += f'<div class="wi"><span class="wd {c}"></span>{item.get("text","")}</div>'
-    html = html.replace("__WATCH_LIST__", wl_html)
+        wl_html += f'<div class="wi"><span class="wd {c}"></span>{_text(item.get("text",""))}</div>'
+    html = html.replace("__WATCH_LIST__", wl_html or _empty("今日无重点观察"))
 
     # Hashtags
-    ht_html = "\n".join([f'<span class="ht">{h}</span>' for h in data.get("hashtags", [])])
+    hashtags = data.get("hashtags") or []
+    if not isinstance(hashtags, list):
+        raise ValueError("hashtags must be an array or null")
+    ht_html = "\n".join([f'<span class="ht">{_text(h)}</span>' for h in hashtags])
     html = html.replace("__HASHTAGS__", ht_html)
 
     # Market dash
     md_html = '<div class="mkt-hdr">📊 市场仪表盘</div><div class="mkt-g">'
     change_map = {"up": "m-up", "down": "m-down", "flat": "", "warn": "m-warn"}
     for item in _safe_items(data.get("market_data", [])):
-        cc = change_map.get(item.get("change", ""), "")
-        md_html += f'<div class="mkt-item"><span class="mn">{item.get("name","")}</span><span class="mv {cc}">{item.get("value","")}</span></div>'
+        value = item.get("value")
+        valid_value = isinstance(value, (str, int, float)) and not isinstance(value, bool)
+        if isinstance(value, str):
+            valid_value = bool(value.strip())
+        elif isinstance(value, (int, float)):
+            valid_value = valid_value and math.isfinite(value)
+        url = canonical_url(item.get("source_url"))
+        unit = item.get("unit")
+        try:
+            as_of = datetime.fromisoformat(item.get("as_of", "").replace("Z", "+00:00"))
+            if as_of.tzinfo is None:
+                raise ValueError("market time must include an offset")
+            stamp = as_of.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        except (ValueError, TypeError, AttributeError):
+            stamp = ""
+        supported = valid_value and url and stamp and isinstance(unit, str) and unit.strip()
+        if supported:
+            cc = change_map.get(item.get("change", ""), "")
+            display_value = f"{value} {unit}"
+            meta = f'<a href="{_text(url)}">来源</a> · {_text(stamp)}'
+        else:
+            cc, display_value = "m-warn", "暂无数据"
+            meta = "缺少有效数值、来源、数据时间或单位"
+            print(f"WARNING: market_data[{item.get('name', '')!r}] has no complete provenance; value omitted", file=sys.stderr)
+        md_html += f'<div class="mkt-item"><div class="mkt-value"><span class="mn">{_text(item.get("name",""))}</span><span class="mv {cc}">{_text(display_value)}</span></div><div class="mkt-meta">{meta}</div></div>'
     md_html += '</div>'
     html = html.replace("__MARKET_DASH__", md_html)
 
@@ -225,7 +295,9 @@ def render_html(data: dict, time_label: str) -> str:
         et = " ".join(str(v) for v in et.values() if isinstance(v, str))
     elif not isinstance(et, str):
         et = str(et)
-    html = html.replace("__EDITOR_TAKE__", et)
+    html = html.replace("__EDITOR_TAKE__", _text(et))
+    if not et.strip():
+        html = html.replace('<div class="et">', '<div class="et" hidden>')
 
     # Date / Vol / Source
     today = datetime.now()
@@ -238,7 +310,14 @@ def render_html(data: dict, time_label: str) -> str:
     html = html.replace("__VOL__", f"VOL.{today.strftime('%m%d')}")
     brief_type = "早报" if time_label == "morning" else "晚报"
     html = html.replace("NEWS AGENT", f"NEWS AGENT · {brief_type}")
-    html = html.replace("__DATA_SOURCE__", f"数据采集 · {today.strftime('%Y-%m-%d %H:%M UTC')}")
+    if data.get("collected_at"):
+        collected_at = datetime.fromisoformat(data["collected_at"].replace("Z", "+00:00"))
+        if collected_at.tzinfo is None:
+            raise ValueError("collected_at must include a timezone")
+        footer = "数据采集 · " + collected_at.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+    else:
+        footer = "生成时间 · " + datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+    html = html.replace("__DATA_SOURCE__", footer)
 
     return html
 
@@ -303,47 +382,58 @@ def send_email(pdf_path: str, time_label: str):
         )
         msg.attach(pdf_attachment)
 
-    server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+    server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=30)
     try:
         server.ehlo()
         server.starttls()
         server.ehlo()
         server.login(FROM_EMAIL, app_password)
-        server.sendmail(FROM_EMAIL, TO_EMAILS, msg.as_string())
+        refused = server.sendmail(FROM_EMAIL, TO_EMAILS, msg.as_string())
+        if refused:
+            raise RuntimeError("Some recipients were refused; this run was not marked fully sent")
     finally:
         server.quit()
     print(f"Email sent with PDF: {subject} -> {TO_EMAILS}")
 
 
-def main():
-    if len(sys.argv) < 2:
-        print(__doc__)
-        sys.exit(1)
-
-    data_path = Path(sys.argv[1])
-    time_label = sys.argv[2] if len(sys.argv) >= 3 and sys.argv[2] in ("morning", "evening") else "morning"
-    no_email = "--no-email" in sys.argv
-
-    if not data_path.exists():
-        print(f"ERROR: data file not found: {data_path}", file=sys.stderr)
-        sys.exit(1)
-
-    data = json.loads(data_path.read_text())
-
-    print("Rendering HTML...")
-    html = render_html(data, time_label)
-
-    print("Generating PDF...")
-    pdf_path = f"/tmp/news_agent_{time_label}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-    html_to_pdf(html, pdf_path)
-
-    if no_email:
-        print(f"Skipping email (--no-email). PDF at: {pdf_path}")
-        return
-
-    print("Sending email...")
-    send_email(pdf_path, time_label)
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("data_path", type=Path)
+    parser.add_argument("time_label", nargs="?", choices=("morning", "evening"), default="morning")
+    parser.add_argument("--no-email", action="store_true")
+    parser.add_argument("--output", type=Path, help="PDF destination (default: a unique temporary filename)")
+    args = parser.parse_args(argv)
+    try:
+        data = json.loads(args.data_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("brief JSON must be an object")
+        tracked = "run_id" in data or "article_urls" in data
+        with NewsState() if tracked else nullcontext(None) as state:
+            if state:
+                _, collected_at = state.validate_selection(data.get("run_id"), data.get("article_urls"))
+                data["collected_at"] = collected_at
+            else:
+                print("Manual brief: no run_id/article_urls; deduplication state will not change.")
+            print("Rendering HTML...")
+            html = render_html(data, args.time_label)
+            pdf_path = args.output or Path(tempfile.gettempdir()) / f"news_agent_{args.time_label}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.pdf"
+            print("Generating PDF...")
+            html_to_pdf(html, str(pdf_path))
+            if state:
+                state.mark_rendered(data["run_id"], data["article_urls"], pdf_path)
+            if args.no_email:
+                print(f"Skipping email (--no-email). PDF at: {pdf_path}")
+                return 0
+            print("Sending email...")
+            send_email(str(pdf_path), args.time_label)
+            if state:
+                state.mark_sent(data["run_id"])
+        return 0
+    except (ValueError, OSError, RuntimeError, smtplib.SMTPException) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
+

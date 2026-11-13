@@ -4,3 +4,9 @@ __pycache__/
 *.pdf
 .DS_Store
 node_modules/
+.news-agent/
+*.sqlite3
+*.sqlite3-*
+output/
+tmp/
+
